@@ -1,7 +1,7 @@
 """
 Database connection and helper functions for Postgres with pgvector.
 """
-import asyncpg
+import asyncpg # type: ignore
 import os
 from typing import Optional, List, Dict, Any
 import json
