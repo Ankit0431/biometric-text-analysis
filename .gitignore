@@ -1,0 +1,142 @@
+# ===== Python =====
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# pip
+pip-wheel-metadata/
+pip-log.txt
+
+# Pytest
+.pytest_cache/
+htmlcov/
+coverage.xml
+.coverage
+.coverage.*
+
+# Installer logs
+pip-delete-this-directory.txt
+
+# ===== Environment / Secrets =====
+# Env files (do NOT commit secrets)
+.env
+.env.*
+infra/.env
+backend/.env
+frontend/.env
+
+# Secrets and credentials
+secrets.json
+.aws/credentials
+.gcloud/
+
+# ===== Machine Learning / Models / Caches =====
+# PyTorch / checkpoints / model weights
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+model_weights/
+weights/
+
+# Hugging Face / transformer caches
+.cache/huggingface/
+.cache/huggingface_hub/
+transformers_cache/
+hf_data/
+
+# torch / numpy cache
+.torch/
+.cache/torch/
+
+# Large local datasets
+data/
+datasets/
+
+# ===== Docker =====
+# Ignore local compose override files and envs
+docker-compose.override.yml
+docker-compose.*.yml
+docker-compose.*.env
+**/Dockerfile.*
+
+# Ignore built images pushed into local directory (if any)
+*.tar
+
+# ===== Node / Frontend =====
+node_modules/
+frontend/node_modules/
+frontend/widget/node_modules/
+dist/
+build/
+.next/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Lockfiles you might want to keep, but ignore if you don't
+# package-lock.json
+
+# ===== IDEs / OS files =====
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# macOS
+.Spotlight-V100
+.Trashes
+
+# Windows image file caches
+ehthumbs.db
+
+# ===== Logs & temporary =====
+*.log
+logs/
+tmp/
+temp/
+*.log.*
+debug.log
+
+# ===== Databases =====
+*.sqlite3
+*.db
+*.db-journal
+
+# ===== Jupyter =====
+.ipynb_checkpoints
+
+# ===== Git / CI =====
+.git-credentials
+.github/workflows/*.local
+
+# ===== Miscellaneous =====
+# Editor backups
+*~
+# lock files
+.lock-wscript
+TASK.md
