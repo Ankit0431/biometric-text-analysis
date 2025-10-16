@@ -17,10 +17,11 @@ from db import db
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     # Startup: connect to database
-    await db.connect()
+    # TODO: Uncomment when PostgreSQL is running
+    # await db.connect()
     yield
     # Shutdown: disconnect from database
-    await db.disconnect()
+    # await db.disconnect()
 
 
 app = FastAPI(lifespan=lifespan)

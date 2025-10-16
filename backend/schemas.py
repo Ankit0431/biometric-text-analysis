@@ -1,7 +1,7 @@
 """
 Pydantic schemas for request/response validation.
 """
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 
 
@@ -14,7 +14,8 @@ class VerifyRequest(BaseModel):
     context: Optional[Dict[str, Any]] = Field(default_factory=dict)
     timings: Optional[Dict[str, Any]] = None
 
-    @validator("text")
+    @field_validator("text")
+    @classmethod
     def text_not_empty(cls, v):
         if not v or not v.strip():
             raise ValueError("text cannot be empty")
