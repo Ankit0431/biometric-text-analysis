@@ -81,6 +81,20 @@ class AuthZ:
         # TODO: implement actual consent checking
         return True
 
+    async def check_consent(self, user_id: str, data_type: str):
+        """
+        Check if user has given consent for specific data type collection.
+
+        Args:
+            user_id: User identifier
+            data_type: Type of data (e.g., "keystrokes", "text")
+
+        For prototype: placeholder that always passes.
+        In production: query database for user consent record.
+        """
+        # TODO: implement actual consent checking
+        return True
+
 
 # Global authz instance
 authz = AuthZ()

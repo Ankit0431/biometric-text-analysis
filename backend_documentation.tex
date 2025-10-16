@@ -1,0 +1,673 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{tocloft}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+
+\geometry{margin=1in}
+
+% Code listing style
+\lstset{
+    backgroundcolor=\color{gray!10},
+    basicstyle=\footnotesize\ttfamily,
+    breaklines=true,
+    captionpos=b,
+    commentstyle=\color{green!50!black},
+    keywordstyle=\color{blue},
+    stringstyle=\color{red},
+    showstringspaces=false,
+    frame=single,
+    language=Python
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Biometric Text Analysis Backend}
+\lhead{\leftmark}
+\cfoot{\thepage}
+
+\title{\textbf{Biometric Text Analysis Backend: \\
+        Comprehensive Technical Documentation}}
+\author{System Architecture Documentation}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document provides a comprehensive technical overview of the biometric text analysis backend system. The system implements behavioral biometric authentication using writing style analysis, combining semantic embeddings with classical stylometric features. It supports user enrollment, continuous authentication, and challenge-response mechanisms for secure identity verification through text analysis.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{System Overview}
+
+\subsection{Introduction}
+The biometric text analysis backend is a sophisticated authentication system that analyzes writing patterns to verify user identity. Unlike traditional biometric systems that rely on physical characteristics, this system leverages behavioral biometrics by analyzing:
+
+\begin{itemize}
+    \item \textbf{Semantic patterns}: Deep learning embeddings capturing meaning and context
+    \item \textbf{Stylometric features}: Classical linguistic patterns including n-grams, function words, and statistical measures
+    \item \textbf{Keystroke dynamics}: Optional timing patterns for enhanced security
+    \item \textbf{LLM detection}: Safeguards against AI-generated text attacks
+\end{itemize}
+
+\subsection{Architecture Philosophy}
+The system follows a microservices-inspired modular architecture with clear separation of concerns:
+
+\begin{itemize}
+    \item \textbf{Stateless API design}: RESTful endpoints with external state management
+    \item \textbf{Async processing}: Non-blocking operations for scalability
+    \item \textbf{Database abstraction}: PostgreSQL with pgvector for efficient similarity search
+    \item \textbf{Caching layer}: Redis for performance optimization
+    \item \textbf{Configurable policies}: Flexible decision-making rules
+\end{itemize}
+
+\section{Core Components}
+
+\subsection{Main Application (\texttt{app.py})}
+
+The main FastAPI application serves as the entry point and orchestrates all system components.
+
+\subsubsection{Key Features}
+\begin{itemize}
+    \item \textbf{Lifecycle Management}: Automatic database and Redis connection handling
+    \item \textbf{CORS Configuration}: Cross-origin support for frontend integration
+    \item \textbf{Rate Limiting}: Built-in protection against abuse
+    \item \textbf{Health Monitoring}: System status endpoints
+\end{itemize}
+
+\subsubsection{API Endpoints}
+\begin{description}
+    \item[\texttt{GET /health}] System health check
+    \item[\texttt{POST /verify}] Primary authentication endpoint
+    \item[\texttt{POST /enroll/start}] Begin user enrollment process
+    \item[\texttt{POST /enroll/submit}] Submit enrollment samples
+    \item[\texttt{POST /challenge/start}] Initiate step-up authentication
+    \item[\texttt{POST /challenge/submit}] Submit challenge response
+\end{description}
+
+\subsection{Data Schemas (\texttt{schemas.py})}
+
+Pydantic models ensure type safety and validation across the API surface.
+
+\subsubsection{Request Models}
+\begin{lstlisting}[caption=Verify Request Schema]
+class VerifyRequest(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=255)
+    text: str = Field(..., min_length=10)
+    lang: str = Field(default="en", max_length=10)
+    domain_hint: str = Field(default="chat", max_length=50)
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    timings: Optional[Dict[str, Any]] = None
+\end{lstlisting}
+
+\subsubsection{Response Models}
+All responses include structured data with decision rationale:
+\begin{itemize}
+    \item \textbf{Decision}: \texttt{allow}, \texttt{challenge}, \texttt{step\_up}, or \texttt{deny}
+    \item \textbf{Score}: Confidence metric in [0,1]
+    \item \textbf{Reasons}: Detailed explanation codes
+    \item \textbf{Thresholds}: Current decision boundaries
+\end{itemize}
+
+\section{Database Layer}
+
+\subsection{Database Design (\texttt{db.py})}
+
+The system uses PostgreSQL with the pgvector extension for efficient vector operations.
+
+\subsubsection{Connection Management}
+\begin{itemize}
+    \item \textbf{Connection Pooling}: asyncpg pool for concurrent operations
+    \item \textbf{Environment Configuration}: Flexible deployment settings
+    \item \textbf{Graceful Shutdown}: Proper resource cleanup
+\end{itemize}
+
+\subsubsection{Schema Structure}
+\begin{description}
+    \item[\texttt{profiles}] User biometric profiles with centroids and statistics
+    \item[\texttt{samples}] Historical text samples for training and analysis
+    \item[\texttt{verification\_logs}] Audit trail of authentication attempts
+    \item[\texttt{enrollments}] Tracking enrollment progress and metadata
+\end{description}
+
+\subsubsection{Key Operations}
+\begin{itemize}
+    \item \textbf{Profile Management}: CRUD operations for user profiles
+    \item \textbf{Vector Similarity}: Efficient nearest neighbor search
+    \item \textbf{Batch Processing}: Optimized multi-sample operations
+    \item \textbf{Analytics}: Aggregated statistics and reporting
+\end{itemize}
+
+\section{Text Processing Pipeline}
+
+\subsection{Text Normalization (\texttt{normalizer.py})}
+
+The normalization pipeline ensures consistent text processing while protecting privacy.
+
+\subsubsection{PII Masking}
+Advanced privacy protection through pattern-based replacement:
+\begin{itemize}
+    \item \textbf{Email addresses}: Replaced with \texttt{[EMAIL]}
+    \item \textbf{Phone numbers}: Multiple format detection and masking
+    \item \textbf{Names}: Heuristic-based person name detection
+    \item \textbf{Organizations}: Company and institution masking
+    \item \textbf{URLs}: Web address sanitization
+\end{itemize}
+
+\subsubsection{Content Filtering}
+\begin{itemize}
+    \item \textbf{Email signatures}: Automatic removal of boilerplate text
+    \item \textbf{Quoted content}: Elimination of forwarded/replied text
+    \item \textbf{Quality checks}: Length and content validation
+\end{itemize}
+
+\subsubsection{Language Detection}
+Statistical analysis for automatic language identification supporting multilingual deployments.
+
+\subsection{Feature Extraction (\texttt{features.py})}
+
+Classical stylometric analysis extracting 512-dimensional feature vectors.
+
+\subsubsection{Character N-grams (256 dimensions)}
+Hash-based encoding of character sequences:
+\begin{equation}
+h(ngram) = \text{hash}(ngram) \bmod 256
+\end{equation}
+
+Features include 3-grams, 4-grams, and 5-grams with frequency normalization.
+
+\subsubsection{Function Word Analysis (100 dimensions)}
+Frequency analysis of grammatical function words:
+\begin{itemize}
+    \item Language-specific function word lists
+    \item Relative frequency computation
+    \item Normalization by text length
+\end{itemize}
+
+\subsubsection{Statistical Features (50 dimensions)}
+Comprehensive linguistic statistics:
+\begin{itemize}
+    \item \textbf{Sentence metrics}: Length mean, variance, distribution
+    \item \textbf{Punctuation analysis}: Usage rates and patterns
+    \item \textbf{Lexical diversity}: Type-token ratios and entropy measures
+    \item \textbf{Syntactic patterns}: POS tag distributions
+\end{itemize}
+
+\subsubsection{POS Trigram Features (106 dimensions)}
+Simplified part-of-speech pattern analysis capturing syntactic style.
+
+\section{Deep Learning Components}
+
+\subsection{Text Encoder (\texttt{encoder.py})}
+
+Transformer-based semantic embedding generation using XLM-RoBERTa.
+
+\subsubsection{Model Architecture}
+\begin{itemize}
+    \item \textbf{Base Model}: \texttt{xlm-roberta-base} (768 dimensions)
+    \item \textbf{Projection Head}: Linear layer mapping to 512 dimensions
+    \item \textbf{Normalization}: L2 normalization for cosine similarity
+    \item \textbf{Pooling Strategy}: Attention-weighted mean pooling
+\end{itemize}
+
+\subsubsection{Optimization Features}
+\begin{itemize}
+    \item \textbf{Dynamic Quantization}: INT8 optimization for CPU inference
+    \item \textbf{Micro-batching}: Automatic request batching for throughput
+    \item \textbf{Device Abstraction}: CPU/GPU automatic selection
+    \item \textbf{Memory Management}: Efficient tensor operations
+\end{itemize}
+
+\subsubsection{Mathematical Foundation}
+Given input text $T$, the encoder produces embedding $\mathbf{e}$:
+
+\begin{align}
+\mathbf{h} &= \text{RoBERTa}(T) \in \mathbb{R}^{L \times 768} \\
+\mathbf{p} &= \text{MeanPool}(\mathbf{h}, \text{mask}) \in \mathbb{R}^{768} \\
+\mathbf{e} &= \frac{\text{Linear}(\mathbf{p})}{||\text{Linear}(\mathbf{p})||_2} \in \mathbb{R}^{512}
+\end{align}
+
+where $L$ is sequence length and the final embedding has unit norm.
+
+\section{Scoring and Similarity}
+
+\subsection{Scoring Engine (\texttt{scoring.py})}
+
+Multi-modal similarity computation combining semantic and stylometric signals.
+
+\subsubsection{Semantic Similarity}
+Mahalanobis-adjusted cosine similarity:
+\begin{equation}
+S_{\text{semantic}} = \cos(\mathbf{e}_{\text{query}}, \mathbf{c}_{\text{user}}) \cdot \sigma(\mathbf{M}^{-1}(\mathbf{e}_{\text{query}} - \mathbf{c}_{\text{user}}))
+\end{equation}
+
+where $\mathbf{c}_{\text{user}}$ is the user's semantic centroid and $\mathbf{M}$ is the covariance matrix.
+
+\subsubsection{Stylometric Similarity}
+Z-score normalization with cohort comparison:
+\begin{equation}
+S_{\text{stylometry}} = \frac{1}{1 + e^{-k \cdot z_{\text{norm}}}}
+\end{equation}
+
+where $z_{\text{norm}}$ is the cohort-normalized z-score and $k$ is a scaling parameter.
+
+\subsubsection{Fusion Scoring}
+Weighted combination of multiple signals:
+\begin{equation}
+S_{\text{final}} = w_s \cdot S_{\text{semantic}} + w_t \cdot S_{\text{stylometry}} - w_l \cdot P_{\text{LLM}}
+\end{equation}
+
+Default weights: $w_s = 0.6$, $w_t = 0.3$, $w_l = 0.1$.
+
+\subsection{LLM Detection (\texttt{llm\_detector.py})}
+
+Heuristic-based detection of AI-generated text to prevent spoofing attacks.
+
+\subsubsection{Detection Strategies}
+\begin{itemize}
+    \item \textbf{Pattern Matching}: Common LLM phrases and constructions
+    \item \textbf{Statistical Analysis}: Sentence length uniformity
+    \item \textbf{Entropy Measures}: Punctuation and vocabulary diversity
+    \item \textbf{Linguistic Markers}: AI-specific language patterns
+\end{itemize}
+
+\subsubsection{Penalty Computation}
+Returns penalty $P_{\text{LLM}} \in [0, 0.2]$ based on:
+\begin{equation}
+P_{\text{LLM}} = \min(0.2, \alpha \cdot N_{\text{patterns}} + \beta \cdot H_{\text{anomaly}})
+\end{equation}
+
+where $N_{\text{patterns}}$ is pattern count and $H_{\text{anomaly}}$ measures statistical deviations.
+
+\section{Authentication Logic}
+
+\subsection{Verification Handler (\texttt{verify\_handlers.py})}
+
+Core authentication processing with comprehensive sample analysis.
+
+\subsubsection{Verification Workflow}
+\begin{algorithm}
+\caption{Sample Verification Process}
+\begin{algorithmic}
+\STATE \textbf{Input:} User ID, text sample, user profile
+\STATE Normalize text and extract features
+\STATE Generate semantic embedding
+\STATE Compute stylometric features  
+\STATE Detect LLM characteristics
+\STATE Calculate multi-modal similarity score
+\STATE Apply policy decision rules
+\STATE \textbf{Return:} Decision with confidence and reasoning
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Challenge Handler}
+Manages step-up authentication through dynamic challenges:
+\begin{itemize}
+    \item \textbf{Challenge Selection}: Context-appropriate prompts
+    \item \textbf{Timing Constraints}: Response windows
+    \item \textbf{Difficulty Adaptation}: Risk-based challenge complexity
+    \item \textbf{Session Management}: Temporary state tracking
+\end{itemize}
+
+\subsection{Policy Engine (\texttt{policy.py})}
+
+Configurable decision-making logic supporting multiple authentication scenarios.
+
+\subsubsection{Decision Matrix}
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+Score Range & Text Quality & Decision \\ \midrule
+$\geq \theta_{\text{high}}$ & Sufficient & ALLOW \\
+$[\theta_{\text{med}}, \theta_{\text{high}})$ & Sufficient & CHALLENGE \\
+$< \theta_{\text{med}}$ & Sufficient & STEP\_UP \\
+Any & Insufficient & CHALLENGE \\
+Any & LLM-detected & CHALLENGE/STEP\_UP \\
+\bottomrule
+\end{tabular}
+\caption{Policy Decision Matrix}
+\end{table}
+
+\subsubsection{Adaptive Thresholds}
+Dynamic threshold adjustment based on:
+\begin{itemize}
+    \item \textbf{Risk Context}: Application-specific security requirements
+    \item \textbf{User History}: Historical performance patterns
+    \item \textbf{Population Statistics}: Cohort-based normalization
+    \item \textbf{Temporal Factors}: Time-of-day and usage patterns
+\end{itemize}
+
+\section{User Enrollment}
+
+\subsection{Enrollment Process (\texttt{enroll\_handlers.py})}
+
+Progressive profile building through multiple text samples.
+
+\subsubsection{Multi-sample Collection}
+\begin{itemize}
+    \item \textbf{Sample Requirements}: Minimum 3-5 samples per user
+    \item \textbf{Quality Validation}: Length and content checks
+    \item \textbf{Diversity Enforcement}: Topic and style variation
+    \item \textbf{Progressive Building}: Incremental profile updates
+\end{itemize}
+
+\subsubsection{Profile Generation}
+Statistical modeling of user characteristics:
+\begin{align}
+\mathbf{c}_{\text{semantic}} &= \frac{1}{N} \sum_{i=1}^{N} \mathbf{e}_i \\
+\mathbf{C}_{\text{semantic}} &= \frac{1}{N-1} \sum_{i=1}^{N} (\mathbf{e}_i - \mathbf{c}_{\text{semantic}})(\mathbf{e}_i - \mathbf{c}_{\text{semantic}})^T
+\end{align}
+
+Similar computations for stylometric centroids and covariance matrices.
+
+\subsection{Challenge Bank (\texttt{challenge\_bank.py})}
+
+Dynamic challenge generation for enhanced security.
+
+\subsubsection{Challenge Types}
+\begin{itemize}
+    \item \textbf{Creative Writing}: Open-ended prompts
+    \item \textbf{Opinion Essays}: Personal viewpoint expression
+    \item \textbf{Technical Descriptions}: Domain-specific explanations
+    \item \textbf{Narrative Tasks}: Storytelling and experience sharing
+\end{itemize}
+
+\subsubsection{Adaptive Selection}
+Context-aware challenge selection based on:
+\begin{itemize}
+    \item User's historical performance
+    \item Current risk assessment
+    \item Domain and application context
+    \item Available time constraints
+\end{itemize}
+
+\section{Infrastructure Components}
+
+\subsection{Caching Layer (\texttt{cache.py})}
+
+Redis-based caching for performance optimization.
+
+\subsubsection{Caching Strategies}
+\begin{itemize}
+    \item \textbf{Profile Caching}: User profile data with TTL
+    \item \textbf{Embedding Caching}: Computed semantic embeddings
+    \item \textbf{Feature Caching}: Stylometric feature vectors
+    \item \textbf{Session State}: Temporary authentication state
+\end{itemize}
+
+\subsubsection{Cache Invalidation}
+Smart invalidation policies:
+\begin{itemize}
+    \item Profile updates trigger related cache eviction
+    \item Time-based expiration for stale data
+    \item Memory pressure handling
+    \item Consistency guarantees across distributed instances
+\end{itemize}
+
+\subsection{Authorization (\texttt{authz.py})}
+
+Security controls and access management.
+
+\subsubsection{Rate Limiting}
+\begin{itemize}
+    \item \textbf{Per-user Limits}: Individual usage quotas
+    \item \textbf{IP-based Limits}: Network-level protection
+    \item \textbf{Adaptive Throttling}: Risk-based rate adjustment
+    \item \textbf{Burst Handling}: Short-term spike accommodation
+\end{itemize}
+
+\subsubsection{Consent Management}
+Privacy-compliant data collection:
+\begin{itemize}
+    \item Keystroke timing consent tracking
+    \item Granular permission management
+    \item Audit trail maintenance
+    \item GDPR compliance features
+\end{itemize}
+
+\section{Performance and Scalability}
+
+\subsection{Optimization Strategies}
+
+\subsubsection{Computational Efficiency}
+\begin{itemize}
+    \item \textbf{Vectorized Operations}: NumPy and PyTorch optimizations
+    \item \textbf{Batch Processing}: Automatic micro-batching
+    \item \textbf{Model Quantization}: INT8 optimization for inference
+    \item \textbf{Memory Management}: Efficient tensor lifecycle
+\end{itemize}
+
+\subsubsection{I/O Optimization}
+\begin{itemize}
+    \item \textbf{Connection Pooling}: Database connection reuse
+    \item \textbf{Async Operations}: Non-blocking I/O throughout
+    \item \textbf{Caching Layers}: Multi-level cache hierarchy
+    \item \textbf{Compression}: Efficient data serialization
+\end{itemize}
+
+\subsection{Monitoring and Observability}
+
+\subsubsection{Performance Metrics}
+\begin{itemize}
+    \item Request latency percentiles
+    \item Throughput measurements
+    \item Error rate tracking
+    \item Resource utilization monitoring
+\end{itemize}
+
+\subsubsection{Security Monitoring}
+\begin{itemize}
+    \item Authentication attempt logging
+    \item Anomaly detection alerts
+    \item Rate limiting violations
+    \item Privacy compliance auditing
+\end{itemize}
+
+\section{Security Considerations}
+
+\subsection{Threat Model}
+
+\subsubsection{Attack Vectors}
+\begin{itemize}
+    \item \textbf{Impersonation}: Mimicking writing style
+    \item \textbf{LLM Generation}: AI-assisted text creation
+    \item \textbf{Replay Attacks}: Reusing previous samples
+    \item \textbf{Profile Poisoning}: Contaminating training data
+\end{itemize}
+
+\subsubsection{Countermeasures}
+\begin{itemize}
+    \item Multi-modal fusion scoring
+    \item LLM detection algorithms
+    \item Temporal freshness validation
+    \item Anomaly detection in enrollment
+\end{itemize}
+
+\subsection{Privacy Protection}
+
+\subsubsection{Data Minimization}
+\begin{itemize}
+    \item Aggressive PII masking
+    \item Feature-level data storage
+    \item Automatic data expiration
+    \item Configurable retention policies
+\end{itemize}
+
+\subsubsection{Differential Privacy}
+Future enhancements for population-level privacy:
+\begin{itemize}
+    \item Noise injection in similarity computations
+    \item Private aggregation for threshold setting
+    \item Federated learning capabilities
+\end{itemize}
+
+\section{Testing and Quality Assurance}
+
+\subsection{Test Suite Coverage}
+
+The system includes comprehensive testing across all components:
+
+\subsubsection{Unit Tests}
+\begin{itemize}
+    \item \textbf{Feature Extraction}: Stylometric computation validation
+    \item \textbf{Encoder Operations}: Embedding generation testing
+    \item \textbf{Scoring Logic}: Similarity computation verification
+    \item \textbf{Policy Engine}: Decision logic validation
+\end{itemize}
+
+\subsubsection{Integration Tests}
+\begin{itemize}
+    \item \textbf{API Endpoints}: Full request-response cycle testing
+    \item \textbf{Database Operations}: CRUD and vector operations
+    \item \textbf{Authentication Flows}: End-to-end verification testing
+    \item \textbf{Challenge Handling}: Step-up authentication validation
+\end{itemize}
+
+\subsubsection{Performance Tests}
+\begin{itemize}
+    \item Load testing for concurrent users
+    \item Latency measurement under stress
+    \item Memory usage profiling
+    \item Database performance validation
+\end{itemize}
+
+\section{Deployment and Operations}
+
+\subsection{Docker Configuration}
+
+The system includes comprehensive containerization:
+
+\subsubsection{Multi-stage Builds}
+\begin{itemize}
+    \item Optimized base images for ML workloads
+    \item Dependency caching for faster builds
+    \item Production-ready security hardening
+    \item Health check integration
+\end{itemize}
+
+\subsubsection{Environment Configuration}
+\begin{itemize}
+    \item Flexible database connection settings
+    \item Redis cluster support
+    \item Model loading configuration
+    \item Logging and monitoring setup
+\end{itemize}
+
+\subsection{Production Considerations}
+
+\subsubsection{High Availability}
+\begin{itemize}
+    \item Stateless service design for horizontal scaling
+    \item Database replication and failover
+    \item Redis clustering for cache availability
+    \item Load balancer health checks
+\end{itemize}
+
+\subsubsection{Backup and Recovery}
+\begin{itemize}
+    \item User profile backup strategies
+    \item Point-in-time recovery capabilities
+    \item Cross-region replication options
+    \item Disaster recovery procedures
+\end{itemize}
+
+\section{Future Enhancements}
+
+\subsection{Planned Features}
+
+\subsubsection{Advanced ML Models}
+\begin{itemize}
+    \item \textbf{Transformer Fine-tuning}: Domain-specific model adaptation
+    \item \textbf{Contrastive Learning}: Improved representation learning
+    \item \textbf{Few-shot Learning}: Rapid user onboarding
+    \item \textbf{Continuous Learning}: Adaptive profile updates
+\end{itemize}
+
+\subsubsection{Enhanced Security}
+\begin{itemize}
+    \item \textbf{Adversarial Detection}: Advanced attack mitigation
+    \item \textbf{Behavioral Analytics}: Context-aware risk assessment
+    \item \textbf{Federated Authentication}: Cross-domain identity verification
+    \item \textbf{Quantum-resistant Cryptography}: Future-proof security
+\end{itemize}
+
+\subsection{Research Directions}
+
+\subsubsection{Multilingual Support}
+\begin{itemize}
+    \item Language-specific feature extraction
+    \item Cross-lingual transfer learning
+    \item Cultural adaptation of stylometric analysis
+    \item Universal writing style representation
+\end{itemize}
+
+\subsubsection{Biometric Fusion}
+\begin{itemize}
+    \item Keystroke dynamics integration
+    \item Mouse movement analysis
+    \item Voice pattern correlation
+    \item Multimodal authentication schemes
+\end{itemize}
+
+\section{Conclusion}
+
+The biometric text analysis backend represents a sophisticated approach to behavioral biometric authentication. By combining state-of-the-art deep learning with proven stylometric techniques, the system achieves robust identity verification while maintaining user privacy and system performance.
+
+The modular architecture enables easy extension and customization for various deployment scenarios, from high-security enterprise environments to consumer applications. Comprehensive testing, monitoring, and security features ensure production readiness and operational reliability.
+
+Future development will focus on enhanced ML capabilities, improved multilingual support, and advanced security features to address evolving threats in the authentication landscape.
+
+\section*{Appendices}
+
+\subsection*{A. Configuration Parameters}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+Parameter & Default Value & Description \\ \midrule
+\texttt{TARGET\_DIM} & 512 & Embedding dimension \\
+\texttt{MAX\_LENGTH} & 256 & Maximum sequence length \\
+\texttt{BATCH\_TIMEOUT\_MS} & 20 & Micro-batch timeout \\
+\texttt{MIN\_WORDS\_VERIFY} & 50 & Minimum words for verification \\
+\texttt{MIN\_WORDS\_ENROLL} & 70 & Minimum words for enrollment \\
+\bottomrule
+\end{tabular}
+\caption{Key Configuration Parameters}
+\end{table}
+
+\subsection*{B. API Response Codes}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}ll@{}}
+\toprule
+Code & Description \\ \midrule
+\texttt{USER\_NOT\_ENROLLED} & User has no biometric profile \\
+\texttt{INSUFFICIENT\_SAMPLES} & Need more enrollment samples \\
+\texttt{TEXT\_TOO\_SHORT} & Text below minimum length \\
+\texttt{LLM\_DETECTED} & AI-generated text suspected \\
+\texttt{RATE\_LIMITED} & Request rate exceeded \\
+\texttt{SCORE\_LOW} & Authentication confidence low \\
+\bottomrule
+\end{tabular}
+\caption{Common Response Reason Codes}
+\end{table}
+
+\end{document}
