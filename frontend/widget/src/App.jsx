@@ -1,45 +1,87 @@
-import React from 'react';
+import React, { useState } from 'react';
 import BiometricTextWidget from './Widget';
+import AuthPage from './AuthPage';
+import BiometricMFA from './BiometricMFA';
+import Dashboard from './Dashboard';
 import './App.css';
 
 function App() {
-  // For demo purposes - in production, userId would come from authentication
-  const userId = 'demo_user_123';
+  const [authState, setAuthState] = useState('login'); // 'login', 'enroll', 'mfa', 'dashboard'
+  const [user, setUser] = useState(null);
 
-  // Toggle between 'enroll' and 'verify' modes
-  const [mode, setMode] = React.useState('enroll');
+  const handleLogin = (userData) => {
+    setUser(userData);
+    if (!userData.biometricEnrolled) {
+      // User needs to enroll first
+      setAuthState('enroll');
+    } else if (userData.requiresMFA) {
+      // User needs to complete MFA
+      setAuthState('mfa');
+    } else {
+      // Direct to dashboard (shouldn't happen with current logic)
+      setAuthState('dashboard');
+    }
+  };
+
+  const handleEnrollmentComplete = () => {
+    // After enrollment, go to MFA for first login
+    setAuthState('mfa');
+  };
+
+  const handleMFASuccess = () => {
+    // MFA successful, go to dashboard
+    setAuthState('dashboard');
+  };
+
+  const handleMFACancel = () => {
+    // User cancelled MFA, back to login
+    setUser(null);
+    setAuthState('login');
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setAuthState('login');
+  };
 
   return (
     <div className="App">
-      <header className="App-header">
-        <h1>Biometric Text Authentication Demo</h1>
-        <div className="mode-selector">
-          <button
-            className={mode === 'enroll' ? 'active' : ''}
-            onClick={() => setMode('enroll')}
-          >
-            Enrollment
-          </button>
-          <button
-            className={mode === 'verify' ? 'active' : ''}
-            onClick={() => setMode('verify')}
-          >
-            Verification
-          </button>
-        </div>
-      </header>
+      {authState === 'login' && (
+        <AuthPage onLogin={handleLogin} />
+      )}
 
-      <main>
-        <BiometricTextWidget
-          mode={mode}
-          userId={userId}
-          apiBase="/api"
+      {authState === 'enroll' && user && (
+        <>
+          <header className="App-header">
+            <h1>Biometric Enrollment</h1>
+            <p>Welcome, {user.name}! Please complete your biometric enrollment.</p>
+          </header>
+          <main>
+            <BiometricTextWidget
+              mode="enroll"
+              userId={user.userId}
+              apiBase="/api"
+              onComplete={handleEnrollmentComplete}
+            />
+          </main>
+        </>
+      )}
+
+      {authState === 'mfa' && user && (
+        <BiometricMFA
+          userId={user.userId}
+          username={user.username}
+          onSuccess={handleMFASuccess}
+          onCancel={handleMFACancel}
         />
-      </main>
+      )}
 
-      <footer className="App-footer">
-        <p>Biometric Text Authentication - Privacy-preserving typing biometrics</p>
-      </footer>
+      {authState === 'dashboard' && user && (
+        <Dashboard
+          user={user}
+          onLogout={handleLogout}
+        />
+      )}
     </div>
   );
 }

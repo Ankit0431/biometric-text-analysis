@@ -1,0 +1,179 @@
+.mfa-container {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 20px;
+}
+
+.mfa-box {
+    background: white;
+    border-radius: 12px;
+    padding: 40px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    max-width: 700px;
+    width: 100%;
+}
+
+.mfa-header h1 {
+    margin: 0 0 10px 0;
+    color: #333;
+    font-size: 28px;
+    text-align: center;
+}
+
+.mfa-subtitle {
+    text-align: center;
+    color: #667eea;
+    margin-bottom: 10px;
+    font-size: 16px;
+}
+
+.challenge-prompt {
+    background: #f8f9fa;
+    border-left: 4px solid #667eea;
+    padding: 20px;
+    margin: 20px 0;
+    border-radius: 8px;
+}
+
+.prompt-text {
+    font-size: 16px;
+    color: #333;
+    font-weight: 500;
+    font-style: italic;
+    margin: 15px 0;
+    padding: 15px;
+    background: white;
+    border-radius: 6px;
+    line-height: 1.6;
+}
+
+.mfa-instruction {
+    text-align: center;
+    color: #666;
+    margin-bottom: 10px;
+    font-size: 14px;
+    line-height: 1.6;
+    font-weight: 600;
+}
+
+.mfa-instruction-sub {
+    text-align: center;
+    color: #888;
+    margin-top: 10px;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.mfa-box .form-group {
+    margin-bottom: 20px;
+}
+
+.mfa-box .form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: #333;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.mfa-box textarea {
+    width: 100%;
+    padding: 12px;
+    border: 2px solid #e0e0e0;
+    border-radius: 6px;
+    font-size: 15px;
+    font-family: inherit;
+    transition: border-color 0.3s;
+    box-sizing: border-box;
+    resize: vertical;
+}
+
+.mfa-box textarea:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.word-count {
+    text-align: right;
+    color: #666;
+    font-size: 13px;
+    margin-top: 8px;
+}
+
+.button-group {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+}
+
+.btn-secondary {
+    flex: 1;
+    padding: 14px;
+    background: #95a5a6;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: #7f8c8d;
+}
+
+.btn-secondary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.mfa-box .btn-primary {
+    flex: 2;
+    padding: 14px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.mfa-box .btn-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.mfa-box .btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.warning-message {
+    background: #fff3cd;
+    color: #856404;
+    padding: 12px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    text-align: center;
+}
+
+.mfa-info {
+    margin-top: 25px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #666;
+    text-align: center;
+}
+
+.mfa-info strong {
+    color: #333;
+}

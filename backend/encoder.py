@@ -15,6 +15,7 @@ import threading
 from typing import List, Optional, Tuple
 from queue import Queue, Empty
 from dataclasses import dataclass
+from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
@@ -27,6 +28,10 @@ TARGET_DIM = 512
 MAX_LENGTH = 256  # Maximum sequence length
 BATCH_TIMEOUT_MS = 20  # Micro-batch timeout in milliseconds
 MAX_BATCH_SIZE = 32  # Maximum batch size
+
+# Path to save/load projection weights
+PROJECTION_WEIGHTS_DIR = Path(__file__).parent / "model_weights"
+PROJECTION_WEIGHTS_FILE = PROJECTION_WEIGHTS_DIR / "projection.pt"
 
 
 @dataclass
@@ -83,8 +88,17 @@ class TextEncoder:
 
         # Create projection head
         self.projection = nn.Linear(self.hidden_size, target_dim)
-        nn.init.xavier_uniform_(self.projection.weight)
-        nn.init.zeros_(self.projection.bias)
+        
+        # Try to load existing projection weights, otherwise initialize randomly
+        if self._load_projection_weights():
+            print(f"✅ Loaded existing projection weights from {PROJECTION_WEIGHTS_FILE}")
+        else:
+            print(f"⚠️  No existing projection weights found. Initializing randomly.")
+            nn.init.xavier_uniform_(self.projection.weight)
+            nn.init.zeros_(self.projection.bias)
+            # Save the newly initialized weights
+            self._save_projection_weights()
+            print(f"💾 Saved new projection weights to {PROJECTION_WEIGHTS_FILE}")
 
         # Move to device
         self.base_model.to(self.device)
@@ -109,6 +123,60 @@ class TextEncoder:
         self.batch_thread_running = False
 
         print(f"Encoder initialized: {self.hidden_size} -> {target_dim} dims")
+
+    def _save_projection_weights(self) -> bool:
+        """
+        Save projection layer weights to disk.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Create directory if it doesn't exist
+            PROJECTION_WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+            
+            # Save projection weights
+            torch.save({
+                'weight': self.projection.weight.cpu(),
+                'bias': self.projection.bias.cpu(),
+                'hidden_size': self.hidden_size,
+                'target_dim': self.target_dim,
+                'model_name': self.model_name,
+            }, PROJECTION_WEIGHTS_FILE)
+            
+            return True
+        except Exception as e:
+            print(f"❌ Error saving projection weights: {e}")
+            return False
+    
+    def _load_projection_weights(self) -> bool:
+        """
+        Load projection layer weights from disk if they exist.
+        
+        Returns:
+            True if weights were loaded, False otherwise
+        """
+        try:
+            if not PROJECTION_WEIGHTS_FILE.exists():
+                return False
+            
+            # Load weights
+            checkpoint = torch.load(PROJECTION_WEIGHTS_FILE, map_location='cpu')
+            
+            # Validate dimensions match
+            if checkpoint['hidden_size'] != self.hidden_size or checkpoint['target_dim'] != self.target_dim:
+                print(f"⚠️  Projection dimensions mismatch. Expected ({self.hidden_size}, {self.target_dim}), "
+                      f"got ({checkpoint['hidden_size']}, {checkpoint['target_dim']}). Ignoring saved weights.")
+                return False
+            
+            # Load weights into projection layer
+            self.projection.weight.data = checkpoint['weight'].to(self.device)
+            self.projection.bias.data = checkpoint['bias'].to(self.device)
+            
+            return True
+        except Exception as e:
+            print(f"❌ Error loading projection weights: {e}")
+            return False
 
     def mean_pool(
         self,

@@ -56,7 +56,7 @@ echo 🔧 Step 3: Starting Backend API...
 cd /d "%PROJECT_ROOT%\backend"
 
 REM Check if virtual environment exists
-if not exist "..\venv\" (
+if not exist "..\.venv\" (
     echo ❌ Virtual environment not found at ..\venv
     echo Please run: python -m venv venv ^&^& venv\Scripts\activate ^&^& pip install -r requirements.txt
     pause

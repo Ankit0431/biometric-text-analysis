@@ -82,6 +82,27 @@ class VerifyHandler:
             normalized.tokens,
             lang=lang
         )
+        
+        # Detect LLM-generated text FIRST and reject immediately if detected
+        from scoring import detect_llm_likeness
+        llm_penalty, is_llm_like = detect_llm_likeness(normalized.text, stylo_stats)
+        
+        # Always log LLM detection results for debugging
+        print(f"DEBUG LLM CHECK: penalty={llm_penalty:.4f}, is_llm_like={is_llm_like}")
+        print(f"  text_length={len(normalized.text)}, num_sentences={normalized.text.count('.')}")
+        
+        if is_llm_like:
+            print(f"⚠️ REJECTING: LLM-generated text detected!")
+            return {
+                "decision": "deny",
+                "score": 0.0,
+                "reasons": ["LLM_GENERATED_TEXT_DETECTED"],
+                "thresholds": {
+                    "high": profile.get("threshold_high", 0.84),
+                    "med": profile.get("threshold_med", 0.72),
+                },
+                "message": "AI-generated text detected. Please write naturally in your own words."
+            }
 
         # Encode text
         embedding = self.encoder.encode([normalized.text])[0]
@@ -95,6 +116,9 @@ class VerifyHandler:
             timings=timings,
             context=context or {},
         )
+        
+        # Debug logging
+        print(f"DEBUG SCORING: semantic={score_result['semantic_score']:.4f}, stylometry={score_result['stylometry_score']:.4f}, keystroke={score_result.get('keystroke_score', 0.5):.4f}, llm_penalty={score_result['llm_penalty']:.4f}, final={score_result['final_score']:.4f}")
 
         # Apply policy decision
         decision_result = decide(

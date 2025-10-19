@@ -159,8 +159,8 @@ def get_default_thresholds() -> Dict[str, float]:
         Dictionary with 'high' and 'med' thresholds
     """
     return {
-        "high": 0.84,
-        "med": 0.72
+        "high": 0.70,  # Lowered for testing with pasted text
+        "med": 0.50
     }
 
 

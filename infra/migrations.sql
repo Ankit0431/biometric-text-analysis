@@ -1,12 +1,16 @@
 -- Enable pgvector extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Users
+-- Users (updated for authentication)
 CREATE TABLE IF NOT EXISTS users (
   user_id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
-  locale TEXT,
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  name TEXT NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  locale TEXT DEFAULT 'en',
   consent_version TEXT,
+  biometric_enrolled BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT now(),
   deleted_at TIMESTAMPTZ
 );
@@ -22,6 +26,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   stylometry_stats JSONB NOT NULL,
   threshold_high REAL NOT NULL,
   threshold_med REAL NOT NULL,
+  prompt_answers JSONB, -- Store prompt_id -> answer_embedding mappings for semantic verification
   last_update TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY (user_id, lang, domain)
 );

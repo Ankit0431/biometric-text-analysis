@@ -19,6 +19,8 @@ from features import extract_features
 from encoder import encode
 from calibrate_thresholds import calibrate_thresholds
 from policy import get_default_thresholds
+from scoring import detect_llm_likeness
+from keystroke_features import extract_keystroke_features, aggregate_keystroke_features
 
 
 # Configuration
@@ -109,7 +111,7 @@ def enroll_start(request: EnrollStartRequest) -> EnrollStartResponse:
     )
 
 
-def enroll_submit(request: EnrollSubmitRequest) -> EnrollSubmitResponse:
+async def enroll_submit(request: EnrollSubmitRequest) -> EnrollSubmitResponse:
     """
     Submit an enrollment sample.
 
@@ -184,8 +186,8 @@ def enroll_submit(request: EnrollSubmitRequest) -> EnrollSubmitResponse:
         )
 
     # Check if normalized text is rejected
-    if normalized.get('rejected_reasons'):
-        warnings.extend(normalized['rejected_reasons'])
+    if normalized.rejected_reasons:
+        warnings.extend(normalized.rejected_reasons)
         return EnrollSubmitResponse(
             accepted=False,
             remaining=session.get_remaining(),
@@ -196,9 +198,9 @@ def enroll_submit(request: EnrollSubmitRequest) -> EnrollSubmitResponse:
     # Extract features
     try:
         # Get tokens from normalized result
-        tokens = normalized.get('tokens', normalized['text'].split())
+        tokens = normalized.tokens
         style_features, style_stats = extract_features(
-            normalized['text'],
+            normalized.text,
             tokens=tokens,
             lang=session.lang
         )
@@ -213,7 +215,7 @@ def enroll_submit(request: EnrollSubmitRequest) -> EnrollSubmitResponse:
 
     # Encode text
     try:
-        embedding = encode([normalized['text']], lang=session.lang)
+        embedding = encode([normalized.text], lang=session.lang)
         embedding = embedding[0]  # Get first (only) embedding
     except Exception as e:
         warnings.append(f"encoding_error_{str(e)}")
@@ -223,6 +225,28 @@ def enroll_submit(request: EnrollSubmitRequest) -> EnrollSubmitResponse:
             warnings=warnings,
             profile_ready=False
         )
+    
+    # Detect LLM-generated text and REJECT if detected
+    try:
+        llm_penalty, is_llm_like = detect_llm_likeness(normalized.text, style_stats)
+        if is_llm_like:
+            return EnrollSubmitResponse(
+                accepted=False,
+                remaining=session.get_remaining(),
+                warnings=["LLM_GENERATED_TEXT_DETECTED", "Please write naturally in your own words, not using AI-generated text."],
+                profile_ready=False
+            )
+    except Exception as e:
+        # If LLM detection fails, log warning but continue
+        warnings.append(f"llm_detection_error_{str(e)}")
+    
+    # Extract keystroke timing features
+    keystroke_features = None
+    if request.timings:
+        try:
+            keystroke_features = extract_keystroke_features(request.timings)
+        except Exception as e:
+            warnings.append(f"keystroke_feature_error_{str(e)}")
 
     # Store submission (without raw text if TTL=0)
     submission = {
@@ -230,14 +254,16 @@ def enroll_submit(request: EnrollSubmitRequest) -> EnrollSubmitResponse:
         "embedding": embedding.tolist() if isinstance(embedding, np.ndarray) else embedding,
         "style_features": style_features.tolist() if isinstance(style_features, np.ndarray) else style_features,
         "style_stats": style_stats,
-        "word_count": normalized.get('word_count', 0),
+        "keystroke_features": keystroke_features.tolist() if keystroke_features is not None else None,
+        "word_count": normalized.word_count,
         "submitted_at": datetime.utcnow().isoformat(),
+        "raw_text": request.text,  # Store raw text for prompt-answer semantic matching
     }
 
-    # Only store raw text if TTL > 0
-    if RAW_TEXT_TTL_DAYS > 0:
-        submission["raw_text"] = request.text
-        submission["normalized_text"] = normalized['text']
+    # Only store raw text if TTL > 0 (legacy, we now always store for semantic matching)
+    # if RAW_TEXT_TTL_DAYS > 0:
+    #     submission["raw_text"] = request.text
+    #     submission["normalized_text"] = normalized.text
 
     session.submissions.append(submission)
 
@@ -246,7 +272,7 @@ def enroll_submit(request: EnrollSubmitRequest) -> EnrollSubmitResponse:
     if session.is_complete():
         try:
             # Compute profile
-            profile_ready = _compute_and_store_profile(session)
+            profile_ready = await _compute_and_store_profile(session)
             if profile_ready:
                 warnings.append("profile_created")
         except Exception as e:
@@ -260,7 +286,7 @@ def enroll_submit(request: EnrollSubmitRequest) -> EnrollSubmitResponse:
     )
 
 
-def _compute_and_store_profile(session: EnrollmentSession) -> bool:
+async def _compute_and_store_profile(session: EnrollmentSession) -> bool:
     """
     Compute user profile from enrollment samples.
 
@@ -270,15 +296,21 @@ def _compute_and_store_profile(session: EnrollmentSession) -> bool:
     Returns:
         True if profile was successfully created
     """
-    # Extract all embeddings and style features
+    # Extract all embeddings, style features, and keystroke features
     embeddings = []
     style_features = []
+    keystroke_features_list = []
 
     for sub in session.submissions:
         emb = np.array(sub["embedding"], dtype=np.float32)
         style = np.array(sub["style_features"], dtype=np.float32)
         embeddings.append(emb)
         style_features.append(style)
+        
+        # Collect keystroke features if available
+        if sub.get("keystroke_features") is not None:
+            kf = np.array(sub["keystroke_features"], dtype=np.float32)
+            keystroke_features_list.append(kf)
 
     embeddings = np.array(embeddings)
     style_features = np.array(style_features)
@@ -294,6 +326,14 @@ def _compute_and_store_profile(session: EnrollmentSession) -> bool:
     # Compute style statistics
     style_mean = np.mean(style_features, axis=0)
     style_std = np.std(style_features, axis=0)
+    
+    # Compute keystroke statistics
+    keystroke_mean = None
+    keystroke_std = None
+    if keystroke_features_list:
+        keystroke_stats = aggregate_keystroke_features(keystroke_features_list)
+        keystroke_mean = keystroke_stats['mean']
+        keystroke_std = keystroke_stats['std']
 
     # Aggregate stylometry stats from all submissions
     stylometry_stats = {}
@@ -307,6 +347,27 @@ def _compute_and_store_profile(session: EnrollmentSession) -> bool:
     stylometry_stats_aggregated = {
         key: np.mean(values) for key, values in stylometry_stats.items()
     }
+    
+    # Add style_mean and style_std to the stylometry_stats JSON
+    stylometry_stats_aggregated['style_mean'] = style_mean.tolist() if isinstance(style_mean, np.ndarray) else style_mean
+    stylometry_stats_aggregated['style_std'] = style_std.tolist() if isinstance(style_std, np.ndarray) else style_std
+    
+    # Add keystroke stats if available
+    if keystroke_mean is not None:
+        stylometry_stats_aggregated['keystroke_mean'] = keystroke_mean.tolist() if isinstance(keystroke_mean, np.ndarray) else keystroke_mean
+        stylometry_stats_aggregated['keystroke_std'] = keystroke_std.tolist() if isinstance(keystroke_std, np.ndarray) else keystroke_std
+    
+    # Store prompt-answer mappings for semantic verification during MFA
+    prompt_answers = {}
+    for sub in session.submissions:
+        challenge_id = sub.get("challenge_id")
+        raw_text = sub.get("raw_text")
+        if challenge_id and raw_text:
+            # Store embedding of the answer for this prompt
+            prompt_answers[challenge_id] = {
+                "embedding": sub["embedding"],  # Already a list
+                "word_count": sub.get("word_count", 0)
+            }
 
     # Calibrate thresholds (if cohort data available)
     # For now, use default thresholds or simple calibration
@@ -325,17 +386,44 @@ def _compute_and_store_profile(session: EnrollmentSession) -> bool:
         "n_samples": len(session.submissions),
         "style_mean": style_mean,
         "style_std": style_std,
+        "keystroke_mean": keystroke_mean,
+        "keystroke_std": keystroke_std,
         "stylometry_stats": stylometry_stats_aggregated,
         "threshold_high": thresholds["high"],
         "threshold_med": thresholds["med"],
         "last_update": datetime.utcnow()
     }
 
-    # In production, store in database
-    # For now, store in memory
-    session.profile = profile
-
-    return True
+    # Store profile in database
+    from db import db
+    try:
+        # First create the user if it doesn't exist
+        await db.create_user(
+            user_id=session.user_id,
+            tenant_id="default",
+            locale="en",
+            consent_version="v1"
+        )
+        await db.upsert_profile(
+            user_id=session.user_id,
+            lang=session.lang,
+            domain=session.domain,
+            centroid=centroid,
+            cov_diag=cov_diag.tolist(),
+            n_samples=len(session.submissions),
+            stylometry_stats=stylometry_stats_aggregated,
+            threshold_high=thresholds["high"],
+            threshold_med=thresholds["med"],
+            prompt_answers=prompt_answers,  # Store prompt-answer mappings
+        )
+        
+        # Mark user as biometric enrolled
+        await db.update_biometric_enrolled(session.user_id, True)
+        
+        return True
+    except Exception as e:
+        print(f"Error storing profile to database: {e}")
+        return False
 
 
 def _calibrate_thresholds_for_user(

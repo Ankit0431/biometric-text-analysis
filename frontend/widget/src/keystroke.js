@@ -90,10 +90,12 @@ export class KeystrokeCollector {
   }
 
   /**
-   * Get raw event count (for testing).
-   * @returns {number} Number of recorded events
+   * Get keystroke count (number of actual key presses, not events).
+   * @returns {number} Number of recorded keystrokes (keydown events)
    */
   getEventCount() {
-    return this.events.length;
+    // Return IKI count + 1 (since first keystroke has no IKI)
+    // Or count only 'down' events from the events array
+    return this.events.filter(e => e.type === 'down').length;
   }
 }

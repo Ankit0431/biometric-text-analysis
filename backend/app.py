@@ -1,7 +1,13 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import os
 import uuid
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 from schemas import (
     VerifyRequest, VerifyResponse,
@@ -10,12 +16,19 @@ from schemas import (
     ChallengeStartRequest, ChallengeStartResponse,
     ChallengeSubmitRequest, ChallengeSubmitResponse,
 )
+from auth_schemas import (
+    SignupRequest, SignupResponse,
+    LoginRequest, LoginResponse,
+    BiometricMFARequest, BiometricMFAResponse,
+    MFAChallengeResponse
+)
 from authz import authz
 from db import db
 from enroll_handlers import enroll_start, enroll_submit
 from verify_handlers import VerifyHandler, ChallengeHandler
 from cache import RedisCache
-from encoder import TextEncoder
+from encoder import TextEncoder, get_encoder
+from auth_handler import signup_user, login_user
 
 # Create singleton Redis cache instance
 redis_cache = RedisCache()
@@ -27,7 +40,11 @@ async def lifespan(app: FastAPI):
     # Startup: connect to database and Redis
     await db.connect()
     await redis_cache.connect()
-    print("✅ Database and Redis connected successfully")
+    
+    # Initialize global encoder
+    get_encoder()
+    
+    print("✅ Database, Redis, and Encoder initialized successfully")
 
     yield
 
@@ -37,6 +54,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Add validation error handler
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    print(f"Validation error: {exc.errors()}")
+    print(f"Request body: {await request.body()}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": str(await request.body())}
+    )
 
 # Enable CORS for frontend
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,6 +81,171 @@ app.add_middleware(
 async def health():
     """Health check endpoint."""
     return {"status": "ok"}
+
+
+@app.post("/auth/signup", response_model=SignupResponse)
+async def api_signup(req: SignupRequest):
+    """
+    Sign up a new user with username and password.
+    """
+    try:
+        result = await signup_user(req.name, req.username, req.password)
+        return SignupResponse(
+            user_id=result["user_id"],
+            username=result["username"],
+            name=result["name"],
+            message="Signup successful. Please complete biometric enrollment."
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error in signup endpoint: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create account")
+
+
+@app.post("/auth/login", response_model=LoginResponse)
+async def api_login(req: LoginRequest):
+    """
+    Authenticate user with username and password (first factor).
+    """
+    try:
+        result = await login_user(req.username, req.password)
+        return LoginResponse(
+            user_id=result["user_id"],
+            username=result["username"],
+            name=result["name"],
+            biometric_enrolled=result["biometric_enrolled"],
+            requires_mfa=result["biometric_enrolled"],
+            message="Login successful" if not result["biometric_enrolled"] else "Please complete biometric MFA"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        print(f"Error in login endpoint: {e}")
+        raise HTTPException(status_code=500, detail="Failed to authenticate")
+
+
+@app.get("/auth/mfa-challenge", response_model=MFAChallengeResponse)
+async def api_get_mfa_challenge(user_id: str):
+    """
+    Get a challenge prompt for MFA verification.
+    Selects a prompt from the same categories used during enrollment but different from enrolled prompts.
+    """
+    try:
+        # Get user profile to find enrolled challenge IDs
+        profile = await db.get_profile(user_id, "en", "chat")
+        
+        if not profile:
+            raise HTTPException(status_code=404, detail="User profile not found. Please complete enrollment first.")
+        
+        # Extract enrolled challenge IDs from prompt_answers
+        prompt_answers = profile.get("prompt_answers", {})
+        enrolled_challenge_ids = list(prompt_answers.keys()) if prompt_answers else []
+        
+        # If no enrolled challenges found, fall back to any challenge
+        if not enrolled_challenge_ids:
+            from challenge_bank import select_challenges
+            challenges = select_challenges(num_challenges=1)
+            challenge = challenges[0]
+        else:
+            # Select an MFA challenge related to enrolled categories
+            from challenge_bank import select_mfa_challenge
+            challenge = select_mfa_challenge(enrolled_challenge_ids)
+        
+        return MFAChallengeResponse(
+            challenge_id=challenge.challenge_id,
+            prompt=challenge.prompt,
+            min_words=challenge.min_words,
+            timebox_s=challenge.timebox_s
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error getting MFA challenge: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate challenge")
+
+
+@app.post("/auth/biometric-mfa", response_model=BiometricMFAResponse)
+async def api_biometric_mfa(req: BiometricMFARequest, request: Request):
+    """
+    Verify biometric text as second factor (MFA).
+    This performs 1:1 matching using only the user's enrolled profile.
+    """
+    print(f"DEBUG: Received MFA request - user_id: {req.user_id}, text length: {len(req.text)}, timings: {type(req.timings)}")
+    try:
+        # Get user profile from database (1:1 matching only)
+        profile = await db.get_profile(req.user_id, "en", "chat")
+        
+        if not profile:
+            return BiometricMFAResponse(
+                success=False,
+                decision="deny",
+                score=0.0,
+                message="Biometric profile not found. Please complete enrollment first."
+            )
+        
+        # Debug: Check profile data
+        print(f"DEBUG PROFILE: centroid shape={profile['centroid'].shape if hasattr(profile['centroid'], 'shape') else 'N/A'}, style_mean={type(profile.get('style_mean'))}, style_std={type(profile.get('style_std'))}")
+        
+        # Initialize verify handler with GLOBAL encoder (same one used during enrollment)
+        encoder = get_encoder()
+        handler = VerifyHandler(encoder=encoder)
+        
+        # Verify the sample (1:1 matching against user's profile only)
+        result = await handler.verify_sample(
+            user_id=req.user_id,
+            text=req.text,
+            profile=profile,
+            lang="en",
+            domain="chat",
+            timings=req.timings,
+            context={}
+        )
+        
+        # Debug logging
+        print(f"DEBUG: Verification result - score: {result['score']}, decision: {result['decision']}, reasons: {result['reasons']}")
+        print(f"DEBUG: Thresholds - high: {result['thresholds']['high']}, med: {result['thresholds']['med']}")
+        
+        # Log decision to database
+        await db.log_decision(
+            user_id=req.user_id,
+            kind="biometric_mfa",
+            lang="en",
+            domain="chat",
+            score=result['score'],
+            decision=result['decision'],
+            reasons=result['reasons'],
+            len_words=len(req.text.split()),
+            policy_version="v1",
+        )
+        
+        success = result['decision'] == 'allow'
+        
+        # Check if LLM was detected
+        if 'LLM_GENERATED_TEXT_DETECTED' in result['reasons']:
+            message = result.get('message', 'AI-generated text detected. Please write naturally in your own words.')
+        elif success:
+            message = "Authentication successful"
+        else:
+            message = f"Authentication failed: {', '.join(result['reasons'])}"
+        
+        return BiometricMFAResponse(
+            success=success,
+            decision=result['decision'],
+            score=result['score'],
+            message=message
+        )
+    
+    except Exception as e:
+        print(f"Error in biometric MFA endpoint: {e}")
+        return BiometricMFAResponse(
+            success=False,
+            decision="deny",
+            score=0.0,
+            message="An error occurred during authentication"
+        )
+
 
 
 @app.post("/verify", response_model=VerifyResponse)
@@ -158,7 +350,7 @@ async def api_enroll_submit(req: EnrollSubmitRequest, request: Request):
 
     try:
         # Call enroll_submit function
-        result = enroll_submit(req)
+        result = await enroll_submit(req)
         return result
 
     except Exception as e:

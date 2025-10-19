@@ -11,11 +11,13 @@ import './Widget.css';
  * - Auto-submit on timeout
  * - Integration with backend API
  */
-export default function BiometricTextWidget({ mode = 'enroll', userId, apiBase = '/api' }) {
+export default function BiometricTextWidget({ mode = 'enroll', userId, apiBase = '/api', onComplete }) {
   const [text, setText] = useState('');
   const [timeLeft, setTimeLeft] = useState(180); // 3 minutes default
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [challenge, setChallenge] = useState(null);
+  const [allChallenges, setAllChallenges] = useState([]); // Store all challenges
+  const [currentChallengeIndex, setCurrentChallengeIndex] = useState(0); // Track which challenge we're on
   const [sessionToken, setSessionToken] = useState(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -85,7 +87,9 @@ export default function BiometricTextWidget({ mode = 'enroll', userId, apiBase =
       }
 
       const data = await response.json();
+      setAllChallenges(data.challenges); // Store all challenges
       setChallenge(data.challenges[0]);
+      setCurrentChallengeIndex(0);
       setSessionToken(data.session_token);
       setSamplesRemaining(data.required_samples);
       setMessage(data.challenges[0].prompt);
@@ -106,10 +110,11 @@ export default function BiometricTextWidget({ mode = 'enroll', userId, apiBase =
    * Prevent paste and log attempt
    */
   const handlePaste = (e) => {
-    e.preventDefault();
-    pasteAttempts.current += 1;
-    setError(`Paste not allowed! Please type naturally. (Attempt ${pasteAttempts.current})`);
-    setTimeout(() => setError(''), 3000);
+    //Isko uncomment karo
+    // e.preventDefault();
+    // pasteAttempts.current += 1;
+    // setError(`Paste not allowed! Please type naturally. (Attempt ${pasteAttempts.current})`);
+    // setTimeout(() => setError(''), 3000);
   };
 
   /**
@@ -183,15 +188,42 @@ export default function BiometricTextWidget({ mode = 'enroll', userId, apiBase =
           if (result.profile_ready) {
             setProfileReady(true);
             setMessage('✅ Enrollment complete! Your profile is ready.');
+            // Call onComplete callback if provided
+            if (onComplete) {
+              setTimeout(() => onComplete(), 2000);
+            }
           } else {
             setMessage(`Sample ${8 - result.remaining} of 8 accepted. ${result.remaining} more to go!`);
             // Reset for next sample
             setText('');
             keystrokeCollector.current.reset();
-            setTimeLeft(challenge.timebox_s);
+
+            // Move to next challenge
+            const nextIndex = currentChallengeIndex + 1;
+            if (nextIndex < allChallenges.length) {
+              setCurrentChallengeIndex(nextIndex);
+              setChallenge(allChallenges[nextIndex]);
+              setMessage(allChallenges[nextIndex].prompt);
+              setTimeLeft(allChallenges[nextIndex].timebox_s);
+            } else {
+              // Fallback: reuse last challenge if we somehow run out
+              setTimeLeft(challenge.timebox_s);
+            }
           }
         } else {
-          setError(`Sample rejected: ${result.warnings.join(', ')}`);
+          // Check for LLM detection warning
+          const warnings = result.warnings || [];
+          const isLLMDetected = warnings.some(w => w.includes('LLM_GENERATED_TEXT_DETECTED') || w.includes('AI-generated'));
+
+          if (isLLMDetected) {
+            setError('⚠️ AI-generated text detected! Please write naturally in your own words, not using AI tools like ChatGPT.');
+          } else {
+            setError(`Sample rejected: ${warnings.join(', ')}`);
+          }
+
+          // Keep text so user can edit and resubmit
+          setIsSubmitting(false);
+          return;
         }
       } else {
         // Verify mode

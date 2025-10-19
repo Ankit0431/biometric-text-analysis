@@ -243,3 +243,65 @@ def validate_challenge_response(
 
     is_valid = len(issues) == 0
     return is_valid, issues
+
+
+def select_mfa_challenge(enrolled_challenge_ids: List[str], seed: int = None) -> ChallengeInfo:
+    """
+    Select a challenge for MFA verification that is:
+    1. From the same category as one of the enrolled challenges (for semantic relevance)
+    2. NOT one of the enrolled challenges (to prevent simple memorization)
+    
+    Args:
+        enrolled_challenge_ids: List of challenge IDs used during enrollment
+        seed: Random seed for reproducibility (optional)
+    
+    Returns:
+        ChallengeInfo for MFA verification
+    """
+    if seed is not None:
+        random.seed(seed)
+    
+    # Get categories used in enrollment
+    enrolled_categories = set()
+    for challenge_id in enrolled_challenge_ids:
+        challenge = get_challenge_by_id(challenge_id)
+        if challenge:
+            enrolled_categories.add(challenge.get("category", ""))
+    
+    # Get all challenges from those categories
+    candidate_challenges = []
+    for category in enrolled_categories:
+        if category in CHALLENGE_PROMPTS:
+            for challenge in CHALLENGE_PROMPTS[category]:
+                # Exclude challenges that were used in enrollment
+                if challenge["id"] not in enrolled_challenge_ids:
+                    candidate_challenges.append(challenge)
+    
+    # If no candidates (user enrolled with all prompts in categories), fall back to any unused challenge
+    if not candidate_challenges:
+        all_challenges = get_all_challenges()
+        candidate_challenges = [c for c in all_challenges if c["id"] not in enrolled_challenge_ids]
+    
+    # If still no candidates (edge case), just pick a random one from enrollment
+    if not candidate_challenges:
+        # This should rarely happen - just reuse a random enrolled challenge
+        fallback_challenge = get_challenge_by_id(random.choice(enrolled_challenge_ids))
+        return ChallengeInfo(
+            challenge_id=fallback_challenge["id"],
+            prompt=fallback_challenge["prompt"],
+            min_words=fallback_challenge["min_words"],
+            timebox_s=fallback_challenge["timebox_s"],
+            constraints=fallback_challenge["constraints"]
+        )
+    
+    # Select a random candidate
+    selected = random.choice(candidate_challenges)
+    
+    return ChallengeInfo(
+        challenge_id=selected["id"],
+        prompt=selected["prompt"],
+        min_words=selected["min_words"],
+        timebox_s=selected["timebox_s"],
+        constraints=selected["constraints"]
+    )
+

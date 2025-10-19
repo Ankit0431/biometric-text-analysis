@@ -42,7 +42,7 @@ class Database:
             row = await conn.fetchrow(
                 """
                 SELECT user_id, lang, domain, centroid, cov_diag, n_samples,
-                       stylometry_stats, threshold_high, threshold_med, last_update
+                       stylometry_stats, threshold_high, threshold_med, prompt_answers, last_update
                 FROM profiles
                 WHERE user_id = $1 AND lang = $2 AND domain = $3
                 """,
@@ -59,6 +59,18 @@ class Database:
                 else:
                     centroid = np.array(centroid_str, dtype=np.float32)
 
+                # Parse stylometry stats and extract style_mean/style_std/keystroke_mean/keystroke_std
+                stylometry_stats = json.loads(row["stylometry_stats"]) if isinstance(row["stylometry_stats"], str) else row["stylometry_stats"]
+                style_mean = stylometry_stats.get('style_mean')
+                style_std = stylometry_stats.get('style_std')
+                keystroke_mean = stylometry_stats.get('keystroke_mean')
+                keystroke_std = stylometry_stats.get('keystroke_std')
+                
+                # Parse prompt_answers
+                prompt_answers = None
+                if row["prompt_answers"]:
+                    prompt_answers = json.loads(row["prompt_answers"]) if isinstance(row["prompt_answers"], str) else row["prompt_answers"]
+                
                 return {
                     "user_id": row["user_id"],
                     "lang": row["lang"],
@@ -66,7 +78,12 @@ class Database:
                     "centroid": centroid,
                     "cov_diag": row["cov_diag"],
                     "n_samples": row["n_samples"],
-                    "stylometry_stats": json.loads(row["stylometry_stats"]) if isinstance(row["stylometry_stats"], str) else row["stylometry_stats"],
+                    "stylometry_stats": stylometry_stats,
+                    "style_mean": np.array(style_mean, dtype=np.float32) if style_mean else None,
+                    "style_std": np.array(style_std, dtype=np.float32) if style_std else None,
+                    "keystroke_mean": np.array(keystroke_mean, dtype=np.float32) if keystroke_mean else None,
+                    "keystroke_std": np.array(keystroke_std, dtype=np.float32) if keystroke_std else None,
+                    "prompt_answers": prompt_answers,
                     "threshold_high": row["threshold_high"],
                     "threshold_med": row["threshold_med"],
                     "last_update": row["last_update"],
@@ -84,6 +101,7 @@ class Database:
         stylometry_stats: Dict[str, Any],
         threshold_high: float,
         threshold_med: float,
+        prompt_answers: Optional[Dict[str, Any]] = None,
     ):
         """
         Insert or update a user profile.
@@ -98,8 +116,8 @@ class Database:
                 """
                 INSERT INTO profiles
                 (user_id, lang, domain, centroid, cov_diag, n_samples,
-                 stylometry_stats, threshold_high, threshold_med, last_update)
-                VALUES ($1, $2, $3, $4::vector, $5, $6, $7, $8, $9, now())
+                 stylometry_stats, threshold_high, threshold_med, prompt_answers, last_update)
+                VALUES ($1, $2, $3, $4::vector, $5, $6, $7, $8, $9, $10, now())
                 ON CONFLICT (user_id, lang, domain)
                 DO UPDATE SET
                     centroid = $4::vector,
@@ -108,10 +126,12 @@ class Database:
                     stylometry_stats = $7,
                     threshold_high = $8,
                     threshold_med = $9,
+                    prompt_answers = $10,
                     last_update = now()
                 """,
                 user_id, lang, domain, centroid_str, cov_diag, n_samples,
-                json.dumps(stylometry_stats), threshold_high, threshold_med
+                json.dumps(stylometry_stats), threshold_high, threshold_med,
+                json.dumps(prompt_answers) if prompt_answers else None
             )
 
     async def log_decision(
@@ -177,6 +197,46 @@ class Database:
                 ON CONFLICT (user_id) DO NOTHING
                 """,
                 user_id, tenant_id, locale, consent_version
+            )
+
+    async def create_user_with_auth(
+        self, user_id: str, username: str, password_hash: str, name: str, 
+        tenant_id: str, locale: str = None
+    ):
+        """Create a new user with authentication credentials."""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO users (user_id, username, password_hash, name, tenant_id, locale, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, now())
+                """,
+                user_id, username, password_hash, name, tenant_id, locale
+            )
+
+    async def get_user_by_username(self, username: str):
+        """Get user by username."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT user_id, username, password_hash, name, biometric_enrolled, 
+                       tenant_id, locale, created_at
+                FROM users
+                WHERE username = $1 AND deleted_at IS NULL
+                """,
+                username
+            )
+            if row:
+                return dict(row)
+            return None
+
+    async def update_biometric_enrolled(self, user_id: str, enrolled: bool = True):
+        """Update biometric enrollment status."""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE users SET biometric_enrolled = $2 WHERE user_id = $1
+                """,
+                user_id, enrolled
             )
 
     async def delete_user(self, user_id: str):
