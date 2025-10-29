@@ -44,11 +44,16 @@ async def lifespan(app: FastAPI):
     # Initialize global encoder
     get_encoder()
     
-    print("✅ Database, Redis, and Encoder initialized successfully")
+    # Initialize adaptive profile management system
+    from adaptive_profiles import initialize_adaptive_system, shutdown_adaptive_system
+    await initialize_adaptive_system(db)
+    
+    print("✅ Database, Redis, Encoder, and Adaptive Profiles initialized successfully")
 
     yield
 
-    # Shutdown: disconnect from database and Redis
+    # Shutdown: disconnect from database, Redis, and adaptive system
+    await shutdown_adaptive_system()
     await db.disconnect()
     await redis_cache.disconnect()
 
@@ -190,7 +195,7 @@ async def api_biometric_mfa(req: BiometricMFARequest, request: Request):
         
         # Initialize verify handler with GLOBAL encoder (same one used during enrollment)
         encoder = get_encoder()
-        handler = VerifyHandler(encoder=encoder)
+        handler = VerifyHandler(encoder=encoder, db=db)
         
         # Verify the sample (1:1 matching against user's profile only)
         result = await handler.verify_sample(
@@ -276,7 +281,7 @@ async def verify(req: VerifyRequest, request: Request):
 
         # Initialize verify handler with encoder
         encoder = TextEncoder()
-        handler = VerifyHandler(encoder=encoder)
+        handler = VerifyHandler(encoder=encoder, db=db)
 
         # Verify the sample
         result = await handler.verify_sample(
@@ -367,14 +372,15 @@ async def challenge_prepare(req: ChallengeStartRequest, request: Request):
 
     try:
         # Initialize challenge handler
-        handler = ChallengeHandler(
+        encoder = TextEncoder()
+        handler = ChallengeHandler(encoder=encoder, db=db)
+
+        # Prepare challenge
+        result = handler.prepare_challenge(
             user_id=req.user_id,
             lang=req.lang,
             domain=req.domain
         )
-
-        # Prepare challenge
-        result = await handler.prepare_challenge()
 
         return ChallengeStartResponse(
             challenge_id=result['challenge_id'],
@@ -402,16 +408,20 @@ async def challenge_submit(req: ChallengeSubmitRequest, request: Request):
 
     try:
         # Initialize challenge handler
-        handler = ChallengeHandler(
-            user_id=req.user_id,
-            lang="en",
-            domain="chat"
-        )
+        encoder = TextEncoder()
+        handler = ChallengeHandler(encoder=encoder, db=db)
 
+        # Get user profile
+        profile = await db.get_profile(req.user_id, lang="en", domain="chat")
+        if not profile:
+            raise HTTPException(status_code=404, detail="User profile not found")
+        
         # Submit challenge response
         result = await handler.submit_challenge(
             challenge_id=req.challenge_id,
+            user_id=req.user_id,
             text=req.text,
+            profile=profile,
             timings=req.timings
         )
 

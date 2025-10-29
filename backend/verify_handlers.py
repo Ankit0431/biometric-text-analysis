@@ -6,9 +6,12 @@ This module implements:
 - Challenge flow: prepare and submit step-up challenges
 """
 import uuid
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from normalizer import normalize
 from features import extract_features
@@ -16,13 +19,15 @@ from encoder import TextEncoder
 from scoring import score_sample
 from policy import decide, get_default_thresholds
 from challenge_bank import select_challenges, get_challenge_by_id
+from adaptive_profiles import adaptive_manager
 
 
 class VerifyHandler:
     """Handler for verify endpoint logic."""
 
-    def __init__(self, encoder: TextEncoder):
+    def __init__(self, encoder: TextEncoder, db=None):
         self.encoder = encoder
+        self.db = db
 
     async def verify_sample(
         self,
@@ -76,12 +81,35 @@ class VerifyHandler:
                 },
             }
 
-        # Compute stylometry features
-        stylo_vec, stylo_stats = extract_features(
-            normalized.text,
-            normalized.tokens,
-            lang=lang
-        )
+        # Compute stylometry features with PCA enhancement
+        try:
+            from stylometry_pca import get_enhanced_pipeline
+            pipeline = get_enhanced_pipeline()
+            
+            if pipeline.is_fitted:
+                # Use PCA-enhanced feature extraction
+                stylo_vec, stylo_stats = pipeline.extract_and_transform_features(
+                    normalized.text,
+                    normalized.tokens,
+                    lang=lang
+                )
+                logger.info("Using PCA-enhanced stylometry features")
+            else:
+                # Fall back to raw features
+                stylo_vec, stylo_stats = extract_features(
+                    normalized.text,
+                    normalized.tokens,
+                    lang=lang
+                )
+                logger.info("PCA pipeline not fitted, using raw stylometry features")
+        except ImportError:
+            # Fall back to raw features if PCA module not available
+            stylo_vec, stylo_stats = extract_features(
+                normalized.text,
+                normalized.tokens,
+                lang=lang
+            )
+            logger.info("PCA module not available, using raw stylometry features")
         
         # Detect LLM-generated text FIRST and reject immediately if detected
         from scoring import detect_llm_likeness
@@ -130,6 +158,40 @@ class VerifyHandler:
             llm_like=score_result.get("llm_like", False),
         )
 
+        # Record verification event for adaptive learning
+        adaptive_manager.record_verification_event(
+            user_id=user_id,
+            score=score_result["final_score"],
+            decision=decision_result["decision"],
+            text_length=len(normalized.text)
+        )
+
+        # Update profile if verification was successful and high-confidence
+        if (decision_result["decision"] == "allow" and 
+            adaptive_manager.should_update_profile(
+                user_id, 
+                score_result["final_score"], 
+                decision_result["decision"]
+            ) and 
+            self.db is not None):
+            
+            # Queue async profile update
+            try:
+                await adaptive_manager.queue_profile_update(
+                    user_id=user_id,
+                    lang=lang,
+                    domain=domain,
+                    current_profile=profile,
+                    new_embedding=embedding,
+                    new_style_features=stylo_vec,
+                    new_style_stats=stylo_stats,
+                    verification_score=score_result["final_score"],
+                    decision=decision_result["decision"]
+                )
+                logger.info(f"Queued adaptive profile update for {user_id}")
+            except Exception as e:
+                logger.error(f"Failed to queue profile update for {user_id}: {e}")
+
         return {
             "decision": decision_result["decision"],
             "score": score_result["final_score"],
@@ -144,9 +206,10 @@ class VerifyHandler:
 class ChallengeHandler:
     """Handler for challenge preparation and submission."""
 
-    def __init__(self, encoder: TextEncoder):
+    def __init__(self, encoder: TextEncoder, db=None):
         self.encoder = encoder
-        self.verify_handler = VerifyHandler(encoder)
+        self.db = db
+        self.verify_handler = VerifyHandler(encoder, db)
 
     def prepare_challenge(
         self,
@@ -166,7 +229,7 @@ class ChallengeHandler:
             Dict with challenge_id, prompt, min_words, timebox_s, constraints
         """
         # Select a single challenge
-        challenges = select_challenges(num_challenges=1, seed=None)
+        challenges = select_challenges(num_challenges=1, seed=42)
 
         if not challenges:
             raise ValueError("No challenges available")

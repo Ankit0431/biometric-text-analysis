@@ -6,13 +6,25 @@ This module implements:
 - Semantic similarity (E_s): cosine similarity to centroid with Mahalanobis normalization
 - Keystroke timing similarity (typing rhythm patterns)
 - LLM-likeness detection (heuristic-based stub)
-- Fusion scoring combining all signals
+- Fusion scoring combining all signals with hybrid feature normalization and adaptive weighting
 """
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 from collections import Counter
 import math
+import logging
 from keystroke_features import extract_keystroke_features, compute_keystroke_similarity
+
+# Try to import new hybrid LLM detection, fallback to old if not available
+try:
+    from llm_detection import detect_llm_likeness as hybrid_detect_llm_likeness
+    HYBRID_LLM_AVAILABLE = True
+except ImportError:
+    hybrid_detect_llm_likeness = None
+    HYBRID_LLM_AVAILABLE = False
+
+# Configure logging for scoring pipeline
+logger = logging.getLogger(__name__)
 
 
 # Default scoring weights
@@ -154,12 +166,18 @@ def compute_stylometry_similarity(
     profile_style_mean: np.ndarray,
     profile_style_std: Optional[np.ndarray] = None,
     cohort_mean: Optional[np.ndarray] = None,
-    cohort_std: Optional[np.ndarray] = None
+    cohort_std: Optional[np.ndarray] = None,
+    use_pca: bool = True
 ) -> float:
     """
-    Compute stylometry similarity using robust distance metrics.
+    Compute stylometry similarity using enhanced PCA-based pipeline or legacy methods.
 
-    Process:
+    Enhanced Process (use_pca=True):
+    1. Check if PCA models are available
+    2. If available, use PCA-transformed features for similarity computation
+    3. Otherwise, fall back to legacy method
+
+    Legacy Process (use_pca=False):
     1. Compute normalized distance relative to profile mean/std
     2. Use robust scaling to handle variability in writing styles
     3. Map through sigmoid to [0, 1]
@@ -168,16 +186,61 @@ def compute_stylometry_similarity(
         style_vector: Current sample's style features
         profile_style_mean: Mean of user's style features
         profile_style_std: Std dev of user's style features
-        cohort_mean: Cohort mean for normalization
-        cohort_std: Cohort std dev for normalization
+        cohort_mean: Cohort mean for normalization (legacy)
+        cohort_std: Cohort std dev for normalization (legacy)
+        use_pca: Whether to use PCA-enhanced pipeline
 
     Returns:
         Stylometry similarity score in [0, 1]
     """
+    # Try PCA-enhanced method first if requested
+    if use_pca:
+        try:
+            from stylometry_pca import get_enhanced_pipeline
+            pipeline = get_enhanced_pipeline()
+            
+            if pipeline.is_fitted:
+                # Check dimension compatibility before using PCA method
+                style_dim = style_vector.shape[0] if len(style_vector.shape) == 1 else style_vector.shape[1]
+                profile_dim = profile_style_mean.shape[0] if len(profile_style_mean.shape) == 1 else profile_style_mean.shape[1]
+                
+                if style_dim == profile_dim:
+                    # Dimensions match, use PCA-enhanced similarity computation
+                    return pipeline.compute_enhanced_similarity(
+                        style_vector,
+                        profile_style_mean,
+                        profile_style_std
+                    )
+                else:
+                    logger.warning(f"Dimension mismatch: style_vector has {style_dim}D, profile has {profile_dim}D. Using fallback similarity computation.")
+                    
+                    # When dimensions don't match, we need to use a fallback approach
+                    # For now, we'll disable PCA and fall back to legacy method
+                    # In the future, profiles should be re-enrolled with PCA features
+                    
+                    # Fall back to legacy method
+            else:
+                logger.info("PCA pipeline not fitted, falling back to legacy method")
+        except ImportError:
+            logger.warning("PCA stylometry module not available, using legacy method")
+        except Exception as e:
+            logger.warning(f"PCA stylometry failed: {e}, falling back to legacy method")
+    
+    # Legacy method
     if len(style_vector.shape) > 1:
         style_vector = style_vector.flatten()
     if len(profile_style_mean.shape) > 1:
         profile_style_mean = profile_style_mean.flatten()
+
+    # Check for dimension compatibility in legacy method
+    style_dim = len(style_vector) if isinstance(style_vector, np.ndarray) else style_vector.shape[0]
+    profile_dim = len(profile_style_mean) if isinstance(profile_style_mean, np.ndarray) else profile_style_mean.shape[0]
+    
+    if style_dim != profile_dim:
+        logger.warning(f"Cannot compute stylometry similarity: style_vector ({style_dim}D) != profile_style_mean ({profile_dim}D)")
+        logger.warning("Profile needs to be re-enrolled with PCA-enhanced features or PCA pipeline needs retraining")
+        # Return a neutral score to avoid complete failure
+        return 0.5
 
     # Compute absolute difference
     diff = style_vector - profile_style_mean
@@ -222,10 +285,15 @@ def compute_stylometry_similarity(
 
 def detect_llm_likeness(
     text: str,
-    stats: Optional[Dict[str, Any]] = None
+    stats: Optional[Dict[str, Any]] = None,
+    use_hybrid: bool = True
 ) -> Tuple[float, bool]:
     """
-    Detect LLM-likeness using multiple statistical heuristics.
+    Detect LLM-likeness using hybrid ML + heuristic approach.
+
+    This function now supports two detection modes:
+    1. Hybrid (default): Uses ML classification + heuristic rules when available
+    2. Heuristic-only: Falls back to original statistical patterns
 
     LLM-generated text typically exhibits:
     - Very consistent sentence lengths (low variance)
@@ -233,15 +301,45 @@ def detect_llm_likeness(
     - Overly formal or structured writing
     - High vocabulary diversity but formulaic patterns
     - Lack of natural typing errors or hesitations
+    - Lower perplexity scores
+    - Distinctive POS tag patterns
 
+    Args:
+        text: Input text
+        stats: Optional pre-computed statistics (legacy parameter)
+        use_hybrid: Whether to use hybrid ML+heuristic detection (default True)
+
+    Returns:
+        Tuple of (llm_penalty, is_llm_like)
+        - llm_penalty: Penalty to apply to score (0 = no penalty, 1 = maximum penalty)
+        - is_llm_like: Boolean flag indicating if text appears LLM-generated
+    """
+    # Try hybrid detection first if available and requested
+    if use_hybrid and HYBRID_LLM_AVAILABLE:
+        try:
+            penalty, is_llm = hybrid_detect_llm_likeness(text)
+            logger.debug(f"Hybrid LLM detection: penalty={penalty:.4f}, is_llm={is_llm}")
+            return penalty, is_llm
+        except Exception as e:
+            logger.warning(f"Hybrid LLM detection failed, falling back to heuristic: {e}")
+    
+    # Fallback to original heuristic-only detection
+    return _heuristic_llm_detection(text, stats)
+
+
+def _heuristic_llm_detection(
+    text: str,
+    stats: Optional[Dict[str, Any]] = None
+) -> Tuple[float, bool]:
+    """
+    Original heuristic-only LLM detection (kept as fallback).
+    
     Args:
         text: Input text
         stats: Optional pre-computed statistics
 
     Returns:
         Tuple of (llm_penalty, is_llm_like)
-        - llm_penalty: Penalty to apply to score (0 = no penalty, 1 = maximum penalty)
-        - is_llm_like: Boolean flag indicating if text appears LLM-generated
     """
     if stats is None:
         stats = {}
@@ -391,6 +489,103 @@ def detect_llm_likeness(
     return penalty, is_llm_like
 
 
+def compute_final_score(
+    semantic_score: float, 
+    stylometry_score: float, 
+    keystroke_score: Optional[float] = None, 
+    llm_penalty: float = 0.0
+) -> float:
+    """
+    Compute final score with hybrid feature fusion and proper normalization.
+    
+    This implements the core scoring algorithm with:
+    - Individual score normalization and clipping
+    - Dynamic weighting based on availability and confidence
+    - Z-score normalization for consistent scaling
+    - Adaptive weight adjustment based on component availability
+    
+    Args:
+        semantic_score: Semantic similarity score [0, 1]
+        stylometry_score: Stylometry similarity score [0, 1]
+        keystroke_score: Keystroke timing similarity score [0, 1] (optional)
+        llm_penalty: LLM-likeness penalty [0, 1]
+        
+    Returns:
+        Final normalized score [0, 1]
+    """
+    # Use provided keystroke score or default to neutral
+    keystroke_value = keystroke_score if keystroke_score is not None else 0.0
+    
+    # Clip individual scores
+    scores = np.array([semantic_score, stylometry_score, keystroke_value])
+    scores = np.clip(scores, 0, 1)
+    
+    # Check if we need normalization (only if scores vary significantly)
+    scores_std = scores.std()
+    if scores_std > 0.1:  # Only normalize if there's meaningful variance
+        # Z-score normalization: (x - mean) / std
+        scores_mean = scores.mean()
+        scores = (scores - scores_mean) / scores_std
+        
+        # Min-max normalization to [0, 1]
+        scores_min = scores.min()
+        scores_max = scores.max()
+        if scores_max - scores_min > 1e-6:
+            scores = (scores - scores_min) / (scores_max - scores_min)
+        else:
+            scores = np.full_like(scores, 0.5)
+    else:
+        # Scores are already similar, use them directly (no normalization needed)
+        # This preserves high scores when all components agree
+        print(f"SCORING: Scores similar (std={scores_std:.3f}), skipping normalization")
+    
+    # Default weights for hybrid fusion
+    weights = {
+        'semantic': 0.45,
+        'stylometry': 0.35, 
+        'keystroke': 0.15,
+        'llm_penalty': 0.05
+    }
+    
+    # Adaptive weight tuning based on availability and confidence
+    if keystroke_score is None:
+        # No keystroke data available - redistribute weight
+        weights['keystroke'] = 0.05  # Minimal weight for default neutral score
+        weights['semantic'] += 0.05   # Boost semantic component
+        print(f"SCORING: Keystroke unavailable, redistributing weights: semantic={weights['semantic']:.2f}")
+    
+    if llm_penalty > 0.4:
+        # High LLM penalty - increase its impact
+        weights['llm_penalty'] = 0.15
+        # Reduce other weights proportionally
+        remaining_weight = 1.0 - weights['llm_penalty']
+        scale_factor = remaining_weight / (weights['semantic'] + weights['stylometry'] + weights['keystroke'])
+        weights['semantic'] *= scale_factor
+        weights['stylometry'] *= scale_factor  
+        weights['keystroke'] *= scale_factor
+        print(f"SCORING: High LLM penalty ({llm_penalty:.3f}), increasing penalty weight to {weights['llm_penalty']:.2f}")
+    
+    # Compute weighted fusion score
+    weighted_score = (
+        weights['semantic'] * scores[0] +
+        weights['stylometry'] * scores[1] + 
+        weights['keystroke'] * scores[2]
+    ) - weights['llm_penalty'] * llm_penalty
+    
+    # Final clipping to [0, 1]
+    final_score = float(np.clip(weighted_score, 0, 1))
+    
+    # Detailed logging for debugging
+    print(f"SCORING FUSION: final={final_score:.4f}")
+    print(f"  Raw scores: semantic={semantic_score:.4f}, stylometry={stylometry_score:.4f}, keystroke={keystroke_score or 0.0:.4f}")
+    print(f"  Normalized: semantic={scores[0]:.4f}, stylometry={scores[1]:.4f}, keystroke={scores[2]:.4f}")
+    print(f"  Weights: semantic={weights['semantic']:.3f}, stylometry={weights['stylometry']:.3f}, keystroke={weights['keystroke']:.3f}, llm_penalty={weights['llm_penalty']:.3f}")
+    print(f"  LLM penalty: {llm_penalty:.4f}")
+    print(f"  Component contributions: semantic={weights['semantic'] * scores[0]:.4f}, stylometry={weights['stylometry'] * scores[1]:.4f}, keystroke={weights['keystroke'] * scores[2]:.4f}, penalty=-{weights['llm_penalty'] * llm_penalty:.4f}")
+    
+    return final_score
+
+
 def score_sample(
     user_profile: Dict[str, Any],
     text: str,
@@ -401,7 +596,7 @@ def score_sample(
     weights: Optional[Dict[str, float]] = None
 ) -> Dict[str, Any]:
     """
-    Score a text sample against a user profile.
+    Score a text sample against a user profile using refactored hybrid fusion pipeline.
 
     This implements the fusion scoring function combining:
     - Semantic embedding similarity (E_s)
@@ -490,7 +685,7 @@ def score_sample(
         print(f"  cosine similarity: {cos_sim:.4f}")
 
     # 3. Compute keystroke timing similarity
-    keystroke_score = 0.5  # Default neutral score
+    keystroke_score = None  # Default to None to trigger adaptive weighting
     if timings and keystroke_mean is not None:
         # Check if there's sufficient keystroke data
         total_events = timings.get('total_events', 0)
@@ -524,31 +719,26 @@ def score_sample(
     # 4. Detect LLM-likeness
     llm_penalty, llm_like = detect_llm_likeness(text)
 
-    # 5. Fusion: weighted combination
-    base_score = (
-        weights['semantic'] * semantic_score +
-        weights['stylometry'] * stylometry_score +
-        weights['keystroke'] * keystroke_score
+    # 5. NEW: Use refactored fusion scoring with proper normalization
+    final_score = compute_final_score(
+        semantic_score=semantic_score,
+        stylometry_score=stylometry_score, 
+        keystroke_score=keystroke_score,
+        llm_penalty=llm_penalty
     )
-
-    # Apply LLM penalty
-    final_score = base_score * (1.0 - weights['llm_penalty'] * llm_penalty)
-
-    # Ensure in [0, 1]
-    final_score = float(np.clip(final_score, 0.0, 1.0))
 
     return {
         'final_score': final_score,
         'semantic_score': float(semantic_score),
         'stylometry_score': float(stylometry_score),
-        'keystroke_score': float(keystroke_score),
+        'keystroke_score': float(keystroke_score) if keystroke_score is not None else None,
         'llm_penalty': float(llm_penalty),
         'llm_like': llm_like,
         'components': {
             'semantic': float(semantic_score),
             'stylometry': float(stylometry_score),
-            'keystroke': float(keystroke_score),
+            'keystroke': float(keystroke_score) if keystroke_score is not None else None,
             'llm_penalty': float(llm_penalty),
         },
-        'weights': weights
+        'weights': weights  # Note: These are the original weights, actual fusion uses adaptive weights
     }

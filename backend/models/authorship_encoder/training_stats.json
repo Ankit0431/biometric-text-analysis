@@ -1,0 +1,13 @@
+{
+  "start_time": "2025-10-28T17:43:35.780422",
+  "end_time": "2025-10-28T17:43:47.812499",
+  "duration_seconds": 12.032077,
+  "epochs": 1,
+  "batch_size": 8,
+  "learning_rate": 2e-05,
+  "warmup_steps": 100,
+  "training_examples": 40,
+  "evaluation_examples": 10,
+  "base_model": "paraphrase-MiniLM-L6-v2",
+  "device": "cpu"
+}
