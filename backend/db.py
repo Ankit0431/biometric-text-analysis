@@ -249,6 +249,79 @@ class Database:
                 user_id
             )
 
+    async def get_all_enrolled_profiles(self, lang: str = "en", domain: str = "chat") -> List[Dict[str, Any]]:
+        """
+        Retrieve all enrolled user profiles for a given language and domain.
+        Used for 1:N identification.
+
+        Args:
+            lang: Language code (default: "en")
+            domain: Domain (default: "chat")
+
+        Returns:
+            List of profile dictionaries with user information
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT p.user_id, p.lang, p.domain, p.centroid, p.cov_diag, p.n_samples,
+                       p.stylometry_stats, p.threshold_high, p.threshold_med, 
+                       u.username, u.name
+                FROM profiles p
+                LEFT JOIN users u ON p.user_id = u.user_id
+                WHERE p.lang = $1 AND p.domain = $2 AND p.n_samples >= 3
+                ORDER BY p.last_update DESC
+                """,
+                lang, domain
+            )
+            
+            profiles = []
+            for row in rows:
+                # Parse centroid
+                centroid_str = row["centroid"]
+                if isinstance(centroid_str, str):
+                    centroid_list = json.loads(centroid_str)
+                    centroid = np.array(centroid_list, dtype=np.float32)
+                else:
+                    centroid = np.array(centroid_str, dtype=np.float32)
+
+                # Parse stylometry stats
+                stylometry_stats = json.loads(row["stylometry_stats"]) if isinstance(row["stylometry_stats"], str) else row["stylometry_stats"]
+                style_mean = stylometry_stats.get('style_mean')
+                style_std = stylometry_stats.get('style_std')
+                keystroke_mean = stylometry_stats.get('keystroke_mean')
+                keystroke_std = stylometry_stats.get('keystroke_std')
+                
+                # Convert lists to numpy arrays safely
+                if isinstance(style_mean, list):
+                    style_mean = np.array(style_mean, dtype=np.float32)
+                if isinstance(style_std, list):
+                    style_std = np.array(style_std, dtype=np.float32)
+                if isinstance(keystroke_mean, list):
+                    keystroke_mean = np.array(keystroke_mean, dtype=np.float32)
+                if isinstance(keystroke_std, list):
+                    keystroke_std = np.array(keystroke_std, dtype=np.float32)
+                
+                profiles.append({
+                    "user_id": row["user_id"],
+                    "username": row["username"],
+                    "name": row["name"],
+                    "lang": row["lang"],
+                    "domain": row["domain"],
+                    "centroid": centroid,
+                    "cov_diag": row["cov_diag"],
+                    "n_samples": row["n_samples"],
+                    "stylometry_stats": stylometry_stats,
+                    "style_mean": style_mean,
+                    "style_std": style_std,
+                    "keystroke_mean": keystroke_mean,
+                    "keystroke_std": keystroke_std,
+                    "threshold_high": row["threshold_high"],
+                    "threshold_med": row["threshold_med"],
+                })
+            
+            return profiles
+
 
 # Global database instance
 db = Database()

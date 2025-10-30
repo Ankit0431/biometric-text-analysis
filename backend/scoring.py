@@ -391,6 +391,130 @@ def detect_llm_likeness(
     return penalty, is_llm_like
 
 
+def compute_final_score(
+    semantic_score: float, 
+    stylometry_score: float, 
+    keystroke_score: Optional[float] = None, 
+    llm_penalty: float = 0.0
+) -> float:
+    """
+    Compute final score with hybrid feature fusion and proper normalization.
+    
+    This implements the core scoring algorithm with:
+    - Individual score normalization and clipping
+    - Dynamic weighting based on availability and confidence
+    - Z-score normalization for consistent scaling
+    - Adaptive weight adjustment based on component availability
+    
+    Args:
+        semantic_score: Semantic similarity score [0, 1]
+        stylometry_score: Stylometry similarity score [0, 1]
+        keystroke_score: Keystroke timing similarity score [0, 1] (optional)
+        llm_penalty: LLM-likeness penalty [0, 1]
+        
+    Returns:
+        Final normalized score [0, 1]
+    """
+    # Use provided keystroke score or default to neutral
+    keystroke_value = keystroke_score if keystroke_score is not None else 0.0
+    
+    # Clip individual scores
+    scores = np.array([semantic_score, stylometry_score, keystroke_value])
+    scores = np.clip(scores, 0, 1)
+    
+    # Check if we need normalization (only if scores vary significantly AND there are extreme outliers)
+    scores_std = scores.std()
+    scores_mean = scores.mean()
+    
+    # Calculate how many scores are significantly below average (potential outliers)
+    low_outliers = np.sum(scores < (scores_mean - 1.5 * scores_std))
+    high_outliers = np.sum(scores > (scores_mean + 1.5 * scores_std))
+    
+    # Only normalize if there's high variance AND clear outliers that would dominate
+    # AND the scores aren't all reasonably high (>0.6)
+    should_normalize = (
+        scores_std > 0.15 and  # High variance
+        (low_outliers > 0 or high_outliers > 0) and  # Clear outliers present
+        scores_mean < 0.75  # Not all scores are high
+    )
+    
+    if should_normalize:
+        # Use gentle rank-based normalization that preserves absolute quality
+        # Sort scores to get ranks
+        score_ranks = np.argsort(np.argsort(scores))  # Double argsort gives ranks
+        n_scores = len(scores)
+        
+        # Map ranks to [0.4, 1.0] range to preserve good absolute scores
+        # Even the "lowest" score gets 0.4, not 0.2, to avoid destroying good scores
+        min_normalized = 0.4
+        max_normalized = 1.0
+        range_normalized = max_normalized - min_normalized
+        
+        # Normalize ranks to [0, 1] then scale to desired range
+        normalized_ranks = score_ranks.astype(float) / (n_scores - 1)
+        normalized_scores = min_normalized + normalized_ranks * range_normalized
+        
+        # CRITICAL FIX: Preserve absolute quality - don't downgrade scores that are already good
+        # If original score was >0.65, don't let normalization make it worse
+        for i in range(len(scores)):
+            if scores[i] > 0.65 and normalized_scores[i] < scores[i]:
+                # Use weighted average: 70% normalized, 30% original to preserve quality
+                normalized_scores[i] = 0.7 * normalized_scores[i] + 0.3 * scores[i]
+        
+        scores = normalized_scores
+        print(f"SCORING: Applied gentle rank-based normalization (std={scores_std:.3f}, mean={scores_mean:.3f})")
+    else:
+        # Scores are either similar, no outliers, or all high quality - use them directly
+        # This preserves high scores when all components agree or when there's no extreme variance
+        print(f"SCORING: Skipping normalization (std={scores_std:.3f}, mean={scores_mean:.3f}, outliers={low_outliers+high_outliers})")
+    
+    # Default weights for hybrid fusion
+    weights = {
+        'semantic': 0.45,
+        'stylometry': 0.35, 
+        'keystroke': 0.15,
+        'llm_penalty': 0.05
+    }
+    
+    # Adaptive weight tuning based on availability and confidence
+    if keystroke_score is None:
+        # No keystroke data available - redistribute weight
+        weights['keystroke'] = 0.05  # Minimal weight for default neutral score
+        weights['semantic'] += 0.05   # Boost semantic component
+        print(f"SCORING: Keystroke unavailable, redistributing weights: semantic={weights['semantic']:.2f}")
+    
+    if llm_penalty > 0.4:
+        # High LLM penalty - increase its impact
+        weights['llm_penalty'] = 0.15
+        # Reduce other weights proportionally
+        remaining_weight = 1.0 - weights['llm_penalty']
+        scale_factor = remaining_weight / (weights['semantic'] + weights['stylometry'] + weights['keystroke'])
+        weights['semantic'] *= scale_factor
+        weights['stylometry'] *= scale_factor  
+        weights['keystroke'] *= scale_factor
+        print(f"SCORING: High LLM penalty ({llm_penalty:.3f}), increasing penalty weight to {weights['llm_penalty']:.2f}")
+    
+    # Compute weighted fusion score
+    weighted_score = (
+        weights['semantic'] * scores[0] +
+        weights['stylometry'] * scores[1] + 
+        weights['keystroke'] * scores[2]
+    ) - weights['llm_penalty'] * llm_penalty
+    
+    # Final clipping to [0, 1]
+    final_score = float(np.clip(weighted_score, 0, 1))
+    
+    # Detailed logging for debugging
+    print(f"SCORING FUSION: final={final_score:.4f}")
+    print(f"  Raw scores: semantic={semantic_score:.4f}, stylometry={stylometry_score:.4f}, keystroke={keystroke_score or 0.0:.4f}")
+    print(f"  Normalized: semantic={scores[0]:.4f}, stylometry={scores[1]:.4f}, keystroke={scores[2]:.4f}")
+    print(f"  Weights: semantic={weights['semantic']:.3f}, stylometry={weights['stylometry']:.3f}, keystroke={weights['keystroke']:.3f}, llm_penalty={weights['llm_penalty']:.3f}")
+    print(f"  LLM penalty: {llm_penalty:.4f}")
+    print(f"  Component contributions: semantic={weights['semantic'] * scores[0]:.4f}, stylometry={weights['stylometry'] * scores[1]:.4f}, keystroke={weights['keystroke'] * scores[2]:.4f}, penalty=-{weights['llm_penalty'] * llm_penalty:.4f}")
+    
+    return final_score
+
+
 def score_sample(
     user_profile: Dict[str, Any],
     text: str,

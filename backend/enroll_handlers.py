@@ -73,7 +73,7 @@ class EnrollmentSession:
 
     def get_remaining(self) -> int:
         """Get number of remaining samples needed."""
-        return self.required_samples - len(self.submissions)
+        return max(0, self.required_samples - len(self.submissions))
 
     def is_complete(self) -> bool:
         """Check if all required samples have been submitted."""
@@ -397,13 +397,7 @@ async def _compute_and_store_profile(session: EnrollmentSession) -> bool:
     # Store profile in database
     from db import db
     try:
-        # First create the user if it doesn't exist
-        await db.create_user(
-            user_id=session.user_id,
-            tenant_id="default",
-            locale="en",
-            consent_version="v1"
-        )
+        # User should already exist from signup, just create the profile
         await db.upsert_profile(
             user_id=session.user_id,
             lang=session.lang,

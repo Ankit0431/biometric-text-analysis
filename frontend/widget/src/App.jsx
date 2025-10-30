@@ -3,10 +3,11 @@ import BiometricTextWidget from './Widget';
 import AuthPage from './AuthPage';
 import BiometricMFA from './BiometricMFA';
 import Dashboard from './Dashboard';
+import GuessUser from './GuessUser';
 import './App.css';
 
 function App() {
-  const [authState, setAuthState] = useState('login'); // 'login', 'enroll', 'mfa', 'dashboard'
+  const [authState, setAuthState] = useState('login'); // 'login', 'enroll', 'mfa', 'dashboard', 'guess-user'
   const [user, setUser] = useState(null);
 
   const handleLogin = (userData) => {
@@ -44,10 +45,23 @@ function App() {
     setAuthState('login');
   };
 
+  const handleGuessUser = () => {
+    console.log('GuessUser button clicked!');
+    setAuthState('guess-user');
+  };
+
+  const handleBackToLogin = () => {
+    setAuthState('login');
+  };
+
   return (
     <div className="App">
       {authState === 'login' && (
-        <AuthPage onLogin={handleLogin} />
+        <AuthPage onLogin={handleLogin} onGuessUser={handleGuessUser} />
+      )}
+
+      {authState === 'guess-user' && (
+        <GuessUser onBack={handleBackToLogin} />
       )}
 
       {authState === 'enroll' && user && (

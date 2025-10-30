@@ -58,3 +58,18 @@ class MFAChallengeResponse(BaseModel):
     prompt: str
     min_words: int
     timebox_s: int
+
+
+class IdentifyUserRequest(BaseModel):
+    """Request for user identification (1:N matching)."""
+    text: str = Field(..., min_length=10)
+    timings: Optional[dict] = None
+
+
+class IdentifyUserResponse(BaseModel):
+    """Response after user identification."""
+    identified_user: Optional[str] = None  # user_id of best match, None if unknown
+    username: Optional[str] = None  # username of best match
+    confidence_score: float  # confidence score [0, 1]
+    all_scores: dict  # scores for all users (for debugging)
+    message: str  # explanation

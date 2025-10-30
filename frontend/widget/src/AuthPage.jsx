@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import './Auth.css';
 
-export default function AuthPage({ onLogin }) {
+export default function AuthPage({ onLogin, onGuessUser }) {
     const [isSignup, setIsSignup] = useState(false);
     const [formData, setFormData] = useState({
         name: '',
@@ -147,6 +147,22 @@ export default function AuthPage({ onLogin }) {
                             </button>
                         </p>
                     )}
+                </div>
+
+                <div className="demo-section">
+                    <div className="divider">
+                        <span>or</span>
+                    </div>
+                    <button 
+                        onClick={onGuessUser} 
+                        className="btn-secondary guess-user-btn"
+                        type="button"
+                    >
+                        🔍 Try "Guess the User" Demo
+                    </button>
+                    <p className="demo-description">
+                        See how our biometric identification works by typing some text!
+                    </p>
                 </div>
             </div>
         </div>

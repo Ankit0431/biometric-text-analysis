@@ -20,7 +20,8 @@ from auth_schemas import (
     SignupRequest, SignupResponse,
     LoginRequest, LoginResponse,
     BiometricMFARequest, BiometricMFAResponse,
-    MFAChallengeResponse
+    MFAChallengeResponse,
+    IdentifyUserRequest, IdentifyUserResponse
 )
 from authz import authz
 from db import db
@@ -246,6 +247,54 @@ async def api_biometric_mfa(req: BiometricMFARequest, request: Request):
             message="An error occurred during authentication"
         )
 
+
+@app.post("/auth/identify-user", response_model=IdentifyUserResponse)
+async def api_identify_user(req: IdentifyUserRequest, request: Request):
+    """
+    Identify user based on text input (1:N matching).
+    This performs identification against all enrolled users to find the best match.
+    """
+    print(f"DEBUG: Received identify-user request - text length: {len(req.text)}, timings: {type(req.timings)}")
+    print(f"DEBUG: Timings data: {req.timings}")
+    
+    try:
+        # Import the user identifier
+        from identify_user import user_identifier
+        
+        # Process timings if provided
+        processed_timings = None
+        if req.timings and 'events' in req.timings:
+            processed_timings = req.timings
+        
+        # Perform 1:N identification
+        result = await user_identifier.identify_user(
+            text=req.text,
+            timings=processed_timings,
+            lang="en",  # Default to English
+            domain="chat"  # Default to chat domain
+        )
+        
+        # Debug logging
+        print(f"DEBUG IDENTIFY: identified_user={result.get('identified_user')}, confidence={result.get('confidence_score'):.4f}")
+        print(f"DEBUG IDENTIFY: all_scores={result.get('all_scores')}")
+        
+        return IdentifyUserResponse(
+            identified_user=result['identified_user'],
+            username=result['username'],
+            confidence_score=result['confidence_score'],
+            all_scores=result['all_scores'],
+            message=result['message']
+        )
+        
+    except Exception as e:
+        print(f"Error in identify-user endpoint: {e}")
+        return IdentifyUserResponse(
+            identified_user=None,
+            username=None,
+            confidence_score=0.0,
+            all_scores={},
+            message=f"An error occurred during identification: {str(e)}"
+        )
 
 
 @app.post("/verify", response_model=VerifyResponse)

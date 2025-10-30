@@ -193,7 +193,8 @@ export default function BiometricTextWidget({ mode = 'enroll', userId, apiBase =
               setTimeout(() => onComplete(), 2000);
             }
           } else {
-            setMessage(`Sample ${8 - result.remaining} of 8 accepted. ${result.remaining} more to go!`);
+            const completedSamples = 8 - result.remaining;
+            setMessage(`Sample ${completedSamples} of 8 accepted. ${result.remaining} more to go!`);
             // Reset for next sample
             setText('');
             keystrokeCollector.current.reset();
@@ -290,9 +291,14 @@ export default function BiometricTextWidget({ mode = 'enroll', userId, apiBase =
     <div className="widget-container">
       <div className="widget-header">
         <h2>{mode === 'enroll' ? 'Text Enrollment' : 'Text Verification'}</h2>
-        {mode === 'enroll' && (
+        {mode === 'enroll' && samplesRemaining > 0 && (
           <div className="progress-indicator">
             Sample {8 - samplesRemaining + 1} of 8
+          </div>
+        )}
+        {mode === 'enroll' && samplesRemaining === 0 && !profileReady && (
+          <div className="progress-indicator">
+            Processing final sample...
           </div>
         )}
       </div>
